@@ -351,6 +351,38 @@ async def root():
 async def health_check():
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
+@app.get("/manifest.json")
+async def get_manifest():
+    """Serve manifest.json for PWA support"""
+    return {
+        "short_name": "Fulfillment Tracking",
+        "name": "Fulfillment Tracking System",
+        "icons": [
+            {
+                "src": "favicon.ico",
+                "sizes": "64x64 32x32 24x24 16x16",
+                "type": "image/x-icon"
+            }
+        ],
+        "start_url": ".",
+        "display": "standalone",
+        "theme_color": "#000000",
+        "background_color": "#ffffff"
+    }
+
+@app.get("/{filename:path}")
+async def serve_static_files(filename: str):
+    """Serve static files for React development"""
+    if filename.endswith('.hot-update.json') or filename.endswith('.hot-update.js'):
+        # Return empty response for hot update files
+        return {"status": "ok"}
+    elif filename == "favicon.ico":
+        # Return empty response for favicon
+        return {"status": "ok"}
+    else:
+        # For any other static file requests, return 404
+        raise HTTPException(status_code=404, detail="File not found")
+
 # Tracker upload endpoints
 @app.post("/api/v1/trackers/upload/")
 async def upload_trackers(tracker_upload: TrackerUpload):
@@ -720,6 +752,37 @@ async def get_tracker_status(tracker_code: str):
         "packing": status.get("packing", False),
         "dispatch": status.get("dispatch", False),
         "next_available_scan": next_scan
+    }
+
+@app.get("/api/v1/tracker/{tracker_code}/packing-details")
+async def get_tracker_packing_details(tracker_code: str):
+    """Get packing details for a specific tracker"""
+    # Check if tracking ID exists in tracker data
+    trackers = get_trackers_by_tracking_id(tracker_code)
+    if not trackers:
+        raise HTTPException(status_code=404, detail="Tracking ID not found")
+    
+    # Get the next SKU to scan for packing
+    next_sku = get_next_sku_to_scan(tracker_code, "packing")
+    if not next_sku:
+        raise HTTPException(status_code=400, detail="All SKUs for this tracking ID have been scanned")
+    
+    # Get progress for this tracking ID
+    progress = get_scan_progress(tracker_code, "packing")
+    
+    return {
+        "tracking_id": tracker_code,
+        "is_multi_sku": len(trackers) > 1,
+        "total_sku_count": len(trackers),
+        "scanned_sku_count": progress["scanned"],
+        "remaining_sku_count": progress["total"] - progress["scanned"],
+        "sku_details": {
+            "g_code": next_sku['g_code'],
+            "ean_code": next_sku['ean_code'],
+            "product_sku_code": next_sku['product_sku_code'],
+            "channel_id": next_sku['channel_id']
+        },
+        "progress": progress
     }
 
 @app.get("/api/v1/tracker/{tracking_id}/count")
@@ -1192,4 +1255,19 @@ startup_fix()
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+    import socket
+    
+    # Try different ports if 8000 is busy
+    ports = [8000, 8001, 8002, 8003, 8004]
+    
+    for port in ports:
+        try:
+            print(f"Attempting to start server on port {port}...")
+            uvicorn.run(app, host="0.0.0.0", port=port)
+            break
+        except OSError as e:
+            if "Address already in use" in str(e) or "only one usage of each socket address" in str(e):
+                print(f"Port {port} is busy, trying next port...")
+                continue
+            else:
+                raise e 

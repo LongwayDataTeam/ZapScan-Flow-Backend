@@ -11,7 +11,7 @@ from app.models import product, order, scan as scan_models
 
 # Import API endpoints
 try:
-    from app.api.v1.endpoints import products, orders, scan
+    from app.api.v1.endpoints import products, orders, scan, dashboard, sheets_workflow
     API_ENDPOINTS_AVAILABLE = True
 except ImportError:
     API_ENDPOINTS_AVAILABLE = False
