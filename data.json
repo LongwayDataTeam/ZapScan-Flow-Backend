@@ -208,6 +208,15 @@
       },
       "timestamp": "2025-07-23T15:11:24.675012",
       "status": "completed"
+    },
+    {
+      "id": "17",
+      "tracker_code": "ASO21G42",
+      "tracking_id": "ASO21G42",
+      "scan_type": "packing_dual",
+      "product_code": "ASO21G42",
+      "timestamp": "2025-07-23T15:41:34.809489",
+      "status": "completed"
     }
   ],
   "tracker_status": {
@@ -228,7 +237,7 @@
     },
     "ASO21G42": {
       "label": true,
-      "packing": false,
+      "packing": true,
       "dispatch": false
     },
     "ASO21G43": {
@@ -644,8 +653,8 @@
         "total": 1
       },
       "packing": {
-        "scanned": 5,
-        "total": 2
+        "scanned": 1,
+        "total": 1
       },
       "dispatch": {
         "scanned": 4,
