@@ -73,6 +73,108 @@
       },
       "timestamp": "2025-07-24T11:46:03.264192",
       "status": "completed"
+    },
+    {
+      "id": "7",
+      "tracker_code": "ASO21G40",
+      "tracking_id": "ASO21G40",
+      "scan_type": "label",
+      "sku_details": {
+        "g_code": "ASO21G40",
+        "ean_code": "ASO21G40",
+        "product_sku_code": "LW-Super-Dlx-Black-4J-P1",
+        "channel_id": "33618"
+      },
+      "timestamp": "2025-07-24T13:24:33.967497",
+      "status": "completed"
+    },
+    {
+      "id": "8",
+      "tracker_code": "ASO21G40_1",
+      "tracking_id": "ASO21G40",
+      "scan_type": "label",
+      "sku_details": {
+        "g_code": "153416040196348",
+        "ean_code": "153416040196348",
+        "product_sku_code": "LW-Super-Dlx-Black-4J-P1",
+        "channel_id": "33618"
+      },
+      "timestamp": "2025-07-24T13:24:33.967583",
+      "status": "completed"
+    },
+    {
+      "id": "9",
+      "tracker_code": "ASO21G45",
+      "tracking_id": "ASO21G45",
+      "scan_type": "label",
+      "sku_details": {
+        "g_code": "ASO21G45",
+        "ean_code": "ASO21G45",
+        "product_sku_code": "LW-Eggo-7E-All-350W-P1",
+        "channel_id": "33618"
+      },
+      "timestamp": "2025-07-24T14:30:46.585306",
+      "status": "completed"
+    },
+    {
+      "id": "10",
+      "tracker_code": "ASO21G45",
+      "tracking_id": "ASO21G45",
+      "scan_type": "packing_dual",
+      "product_code": "ASO21G45",
+      "timestamp": "2025-07-24T14:30:59.708930",
+      "status": "completed"
+    },
+    {
+      "id": "11",
+      "tracker_code": "ASO21G45",
+      "tracking_id": "ASO21G45",
+      "scan_type": "dispatch",
+      "sku_details": {
+        "g_code": "ASO21G45",
+        "ean_code": "ASO21G45",
+        "product_sku_code": "LW-Eggo-7E-All-350W-P1",
+        "channel_id": "33618"
+      },
+      "timestamp": "2025-07-24T14:31:03.994377",
+      "status": "completed"
+    },
+    {
+      "id": "12",
+      "tracker_code": "ASO21G42",
+      "tracking_id": "ASO21G42",
+      "scan_type": "label",
+      "sku_details": {
+        "g_code": "ASO21G42",
+        "ean_code": "ASO21G42",
+        "product_sku_code": "LW-Cruiser-ICT-PB-2000W-Black-P1",
+        "channel_id": "33618"
+      },
+      "timestamp": "2025-07-24T14:33:29.603140",
+      "status": "completed"
+    },
+    {
+      "id": "13",
+      "tracker_code": "ASO21G42",
+      "tracking_id": "ASO21G42",
+      "scan_type": "packing_dual",
+      "product_code": "ASO21G42",
+      "timestamp": "2025-07-24T14:33:40.862537",
+      "status": "completed"
+    },
+    {
+      "id": "14",
+      "tracker_code": "ASO21G42",
+      "tracking_id": "ASO21G42",
+      "scan_type": "dispatch",
+      "sku_details": {
+        "g_code": "ASO21G42",
+        "ean_code": "ASO21G42",
+        "product_sku_code": "LW-Cruiser-ICT-PB-2000W-Black-P1",
+        "channel_id": "33618"
+      },
+      "timestamp": "2025-07-24T14:33:44.123370",
+      "status": "completed"
     }
   ],
   "tracker_status": {
@@ -82,7 +184,7 @@
       "dispatch": false
     },
     "ASO21G40": {
-      "label": false,
+      "label": true,
       "packing": false,
       "dispatch": false
     },
@@ -92,9 +194,9 @@
       "dispatch": false
     },
     "ASO21G42": {
-      "label": false,
-      "packing": false,
-      "dispatch": false
+      "label": true,
+      "packing": true,
+      "dispatch": true
     },
     "ASO21G43": {
       "label": false,
@@ -107,9 +209,9 @@
       "dispatch": true
     },
     "ASO21G45": {
-      "label": false,
-      "packing": false,
-      "dispatch": false
+      "label": true,
+      "packing": true,
+      "dispatch": true
     },
     "ASO21G39_1": {
       "label": true,
@@ -117,7 +219,7 @@
       "dispatch": false
     },
     "ASO21G40_1": {
-      "label": false,
+      "label": true,
       "packing": false,
       "dispatch": false
     },
@@ -364,7 +466,7 @@
       "dispatch": 7
     },
     "ASO21G40": {
-      "label": 14,
+      "label": 16,
       "dispatch": 6
     },
     "ASO21G41": {
@@ -372,8 +474,8 @@
       "dispatch": 6
     },
     "ASO21G42": {
-      "label": 8,
-      "dispatch": 4
+      "label": 9,
+      "dispatch": 5
     },
     "ASO21G43": {
       "label": 8,
@@ -384,8 +486,8 @@
       "dispatch": 6
     },
     "ASO21G45": {
-      "label": 7,
-      "dispatch": 5
+      "label": 8,
+      "dispatch": 6
     }
   },
   "tracker_scan_progress": {
@@ -513,7 +615,7 @@
         "total": 1
       },
       "dispatch": {
-        "scanned": 4,
+        "scanned": 1,
         "total": 1
       }
     },
