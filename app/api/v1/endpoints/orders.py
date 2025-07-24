@@ -106,9 +106,17 @@ def delete_order(order_id: int, db: Session = Depends(get_db)):
 @router.post("/upload", response_model=OrderUploadResponse)
 async def upload_orders(
     file: UploadFile = File(...),
+    duplicate_handling: str = Query("allow", description="How to handle duplicates: 'skip', 'allow', or 'update'"),
     db: Session = Depends(get_db)
 ):
-    """Upload orders from CSV/Excel file"""
+    """Upload orders from CSV/Excel file with duplicate handling options"""
+    # Validate duplicate handling parameter
+    if duplicate_handling not in ["skip", "allow", "update"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid duplicate_handling. Must be 'skip', 'allow', or 'update'"
+        )
+    
     # Validate file type
     file_extension = os.path.splitext(file.filename)[1].lower()
     if file_extension not in settings.ALLOWED_EXTENSIONS:
@@ -131,8 +139,8 @@ async def upload_orders(
         temp_file_path = temp_file.name
     
     try:
-        # Process the file
-        result = OrderService.bulk_upload_orders(db, temp_file_path)
+        # Process the file with duplicate handling
+        result = OrderService.bulk_upload_orders(db, temp_file_path, duplicate_handling)
         return result
     finally:
         # Clean up temporary file

@@ -201,8 +201,17 @@ class OrderService:
         return progress
     
     @staticmethod
-    def bulk_upload_orders(db: Session, file_path: str) -> OrderUploadResponse:
-        """Bulk upload orders from CSV/Excel file"""
+    def bulk_upload_orders(db: Session, file_path: str, duplicate_handling: str = "allow") -> OrderUploadResponse:
+        """Bulk upload orders from CSV/Excel file with duplicate handling
+        
+        Args:
+            db: Database session
+            file_path: Path to the CSV/Excel file
+            duplicate_handling: How to handle duplicates
+                - "skip": Skip orders with existing tracking ID
+                - "allow": Allow duplicates (create separate entries)
+                - "update": Update existing order if tracking ID exists
+        """
         try:
             # Read file
             if file_path.endswith('.csv'):
@@ -213,6 +222,8 @@ class OrderService:
             total_processed = len(df)
             successful = 0
             failed = 0
+            skipped = 0
+            updated = 0
             errors = []
             
             for index, row in df.iterrows():
@@ -228,6 +239,42 @@ class OrderService:
                         failed += 1
                         continue
                     
+                    shipment_tracker = str(row['Shipment Tracker']).strip()
+                    
+                    # Check if order with this tracking ID already exists
+                    existing_order = OrderService.get_order_by_tracker(db, shipment_tracker)
+                    
+                    if existing_order:
+                        if duplicate_handling == "skip":
+                            errors.append(f"Row {index + 1}: Order with tracking ID '{shipment_tracker}' already exists, skipping")
+                            skipped += 1
+                            continue
+                        elif duplicate_handling == "update":
+                            # Update existing order
+                            order_data = {
+                                "channel_id": str(row.get('Channel ID', '')).strip() if pd.notna(row.get('Channel ID')) else None,
+                                "order_id": str(row.get('Order ID/PO ID/Shipment Number', '')).strip(),
+                                "po_id": str(row.get('Order ID/PO ID/Shipment Number', '')).strip(),
+                                "shipment_number": str(row.get('Order ID/PO ID/Shipment Number', '')).strip(),
+                                "sub_order_id": str(row.get('Sub Order ID/Invoice Number', '')).strip() if pd.notna(row.get('Sub Order ID/Invoice Number')) else None,
+                                "invoice_number": str(row.get('Invoice Number', '')).strip() if pd.notna(row.get('Invoice Number')) else None,
+                                "courier": str(row.get('Courier', '')).strip() if pd.notna(row.get('Courier')) else None,
+                                "channel_name": str(row.get('Channel Name', '')).strip() if pd.notna(row.get('Channel Name')) else None,
+                                "channel_listing_id": str(row.get('Channel Listing ID', '')).strip() if pd.notna(row.get('Channel Listing ID')) else None,
+                                "total_amount": float(row.get('Amount', 0)) if pd.notna(row.get('Amount')) else None,
+                                "payment_mode": str(row.get('Payment Mode', '')).strip() if pd.notna(row.get('Payment Mode')) else None,
+                                "order_status": str(row.get('Order Status', '')).strip() if pd.notna(row.get('Order Status')) else None,
+                                "buyer_city": str(row.get('Buyer City', '')).strip() if pd.notna(row.get('Buyer City')) else None,
+                                "buyer_state": str(row.get('Buyer State', '')).strip() if pd.notna(row.get('Buyer State')) else None,
+                                "buyer_pincode": str(row.get('Buyer Pincode', '')).strip() if pd.notna(row.get('Buyer Pincode')) else None,
+                            }
+                            
+                            # Update order
+                            OrderService.update_order(db, existing_order.id, OrderUpdate(**order_data))
+                            updated += 1
+                            continue
+                        # If duplicate_handling == "allow", continue to create new order
+                    
                     # Create order data
                     order_data = {
                         "channel_id": str(row.get('Channel ID', '')).strip() if pd.notna(row.get('Channel ID')) else None,
@@ -236,7 +283,7 @@ class OrderService:
                         "shipment_number": str(row.get('Order ID/PO ID/Shipment Number', '')).strip(),
                         "sub_order_id": str(row.get('Sub Order ID/Invoice Number', '')).strip() if pd.notna(row.get('Sub Order ID/Invoice Number')) else None,
                         "invoice_number": str(row.get('Invoice Number', '')).strip() if pd.notna(row.get('Invoice Number')) else None,
-                        "shipment_tracker": str(row['Shipment Tracker']).strip(),
+                        "shipment_tracker": shipment_tracker,
                         "courier": str(row.get('Courier', '')).strip() if pd.notna(row.get('Courier')) else None,
                         "channel_name": str(row.get('Channel Name', '')).strip() if pd.notna(row.get('Channel Name')) else None,
                         "channel_listing_id": str(row.get('Channel Listing ID', '')).strip() if pd.notna(row.get('Channel Listing ID')) else None,
@@ -264,12 +311,20 @@ class OrderService:
                     errors.append(f"Row {index + 1}: {str(e)}")
                     failed += 1
             
+            # Create appropriate message based on duplicate handling
+            if duplicate_handling == "skip":
+                message = f"Processed {total_processed} orders. {successful} created, {skipped} skipped (duplicates), {failed} failed."
+            elif duplicate_handling == "update":
+                message = f"Processed {total_processed} orders. {successful} created, {updated} updated, {failed} failed."
+            else:  # allow
+                message = f"Processed {total_processed} orders. {successful} successful, {failed} failed."
+            
             return OrderUploadResponse(
                 total_processed=total_processed,
                 successful=successful,
                 failed=failed,
                 errors=errors,
-                message=f"Processed {total_processed} orders. {successful} successful, {failed} failed."
+                message=message
             )
             
         except Exception as e:
