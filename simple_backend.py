@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Minimal FastAPI backend for Fulfillment Tracking System
+Simplified FastAPI backend for Fulfillment Tracking System
+Uses only local file storage (data.json) - No Google Sheets integration
 """
 
 from fastapi import FastAPI, HTTPException
@@ -251,137 +252,17 @@ def generate_unique_tracker_key(base_tracker_code: str, existing_keys: list) -> 
     
     return f"{base_tracker_code}_{counter}"
 
-def fix_existing_data_structure():
-    """Fix existing data structure to have proper _1, _2, _3 suffixes"""
-    global tracker_status, tracker_data, uploaded_trackers
-    
-    print("Fixing data structure...")
-    
-    # Find all tracking IDs that have suffixes
-    tracking_groups = {}
-    for key in tracker_status.keys():
-        if '_' in key:
-            base_id = key.split('_')[0]
-            suffix = key.split('_')[1]
-            if base_id not in tracking_groups:
-                tracking_groups[base_id] = []
-            tracking_groups[base_id].append((key, suffix))
-    
-    # Create new data structures
-    new_tracker_status = {}
-    new_tracker_data = {}
-    new_uploaded_trackers = []
-    
-    # Process each tracking group
-    for base_id, items in tracking_groups.items():
-        # Sort by suffix number
-        items.sort(key=lambda x: int(x[1]) if x[1].isdigit() else 999)
-        
-        # Create new keys starting from _1
-        for i, (old_key, old_suffix) in enumerate(items, 1):
-            new_key = f"{base_id}_{i}"
-            
-            print(f"  {old_key} -> {new_key}")
-            
-            # Update tracker_status
-            if old_key in tracker_status:
-                new_tracker_status[new_key] = tracker_status[old_key]
-            
-            # Update tracker_data
-            if old_key in tracker_data:
-                new_tracker_data[new_key] = tracker_data[old_key]
-            
-            # Update uploaded_trackers
-            if old_key in uploaded_trackers:
-                new_uploaded_trackers.append(new_key)
-    
-    # Add keys that don't have suffixes
-    for key in tracker_status.keys():
-        if '_' not in key:
-            new_tracker_status[key] = tracker_status[key]
-            if key in tracker_data:
-                new_tracker_data[key] = tracker_data[key]
-            if key in uploaded_trackers:
-                new_uploaded_trackers.append(key)
-    
-    # Update global variables
-    tracker_status = new_tracker_status
-    tracker_data = new_tracker_data
-    uploaded_trackers = new_uploaded_trackers
-    
-    save_data()
-    print("Data structure fixed successfully!")
-
 # Load data on startup
 load_data()
-
-# Fix data structure on startup if needed
-def startup_fix():
-    """Fix data structure on startup"""
-    try:
-        # Check if there are any keys with _2, _3, _4 but no _1
-        needs_fixing = False
-        for key in tracker_status.keys():
-            if '_' in key:
-                base_id = key.split('_')[0]
-                suffix = key.split('_')[1]
-                if suffix.isdigit() and int(suffix) > 1:
-                    # Check if _1 exists
-                    if f"{base_id}_1" not in tracker_status:
-                        needs_fixing = True
-                        break
-        
-        if needs_fixing:
-            print("Detected inconsistent data structure. Fixing...")
-            fix_existing_data_structure()
-        else:
-            print("Data structure is consistent.")
-    except Exception as e:
-        print(f"Error during startup fix: {e}")
-
-# Run startup fix
-startup_fix()
 
 # Basic endpoints
 @app.get("/")
 async def root():
-    return {"message": "Fulfillment Tracking API"}
+    return {"message": "Fulfillment Tracking API - Local File Storage"}
 
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
-
-@app.get("/manifest.json")
-async def get_manifest():
-    """Serve manifest.json for PWA support"""
-    return {
-        "short_name": "Fulfillment Tracking",
-        "name": "Fulfillment Tracking System",
-        "icons": [
-            {
-                "src": "favicon.ico",
-                "sizes": "64x64 32x32 24x24 16x16",
-                "type": "image/x-icon"
-            }
-        ],
-        "start_url": ".",
-        "display": "standalone",
-        "theme_color": "#000000",
-        "background_color": "#ffffff"
-    }
-
-@app.get("/{filename:path}")
-async def serve_static_files(filename: str):
-    """Serve static files for React development"""
-    if filename.endswith('.hot-update.json') or filename.endswith('.hot-update.js'):
-        # Return empty response for hot update files
-        return {"status": "ok"}
-    elif filename == "favicon.ico":
-        # Return empty response for favicon
-        return {"status": "ok"}
-    else:
-        # For any other static file requests, return 404
-        raise HTTPException(status_code=404, detail="File not found")
 
 # Tracker upload endpoints
 @app.post("/api/v1/trackers/upload/")
@@ -461,21 +342,6 @@ async def get_uploaded_trackers():
     return {
         "uploaded_trackers": uploaded_trackers,
         "total_count": len(uploaded_trackers)
-    }
-
-@app.get("/api/v1/tracker/{tracker_code}/details")
-async def get_tracker_details(tracker_code: str):
-    """Get detailed information for a specific tracker"""
-    if tracker_code not in uploaded_trackers:
-        raise HTTPException(status_code=404, detail="Tracker not found")
-    
-    details = tracker_data.get(tracker_code, {})
-    status = tracker_status.get(tracker_code, {"label": False, "packing": False, "dispatch": False})
-    
-    return {
-        "tracker_code": tracker_code,
-        "details": details,
-        "status": status
     }
 
 # Scan endpoints
@@ -592,45 +458,31 @@ async def process_packing_dual_scan(scan_request: PackingDualScanRequest):
     tracking_id = scan_request.tracker_code
     product_code = scan_request.product_code
     
-    print(f"DEBUG: Packing dual scan requested for tracking_id: {tracking_id}, product_code: {product_code}")
-    
     # Get trackers for this tracking ID
     trackers = get_trackers_by_tracking_id(tracking_id)
     if not trackers:
-        print(f"DEBUG: No trackers found for {tracking_id}")
         raise HTTPException(status_code=400, detail="Tracking ID not found in uploaded data")
-    
-    print(f"DEBUG: Found {len(trackers)} trackers for {tracking_id}")
     
     # Get the next SKU to scan for packing
     next_sku = get_next_sku_to_scan(tracking_id, "packing")
     if not next_sku:
-        print(f"DEBUG: No next SKU found for {tracking_id}")
         raise HTTPException(status_code=400, detail="All SKUs for this tracking ID have been scanned")
     
     tracker_code = next_sku['tracker_code']
-    print(f"DEBUG: Next SKU tracker_code: {tracker_code}")
     
     # Check if already scanned
     if tracker_code in tracker_status and tracker_status[tracker_code].get("packing", False):
-        print(f"DEBUG: Tracker {tracker_code} already scanned for packing")
         raise HTTPException(status_code=400, detail="Packing scan already completed for this SKU")
     
     # Validate product code (check if it matches the tracker's product)
     g_code = next_sku['g_code']
     ean_code = next_sku['ean_code']
     
-    print(f"DEBUG: Expected G-Code: {g_code}, EAN-Code: {ean_code}")
-    print(f"DEBUG: Scanned product code: {product_code}")
-    
     if product_code not in [g_code, ean_code]:
-        print(f"DEBUG: Product code mismatch")
         raise HTTPException(
             status_code=400, 
             detail=f"Product code {product_code} does not match tracker's G-Code ({g_code}) or EAN-Code ({ean_code})"
         )
-    
-    print(f"DEBUG: Product code validated successfully")
     
     scan_record = {
         "id": str(len(scans_db) + 1),
@@ -652,8 +504,6 @@ async def process_packing_dual_scan(scan_request: PackingDualScanRequest):
     update_scan_progress(tracking_id, "packing")
     
     save_data()
-    
-    print(f"DEBUG: Packing dual scan completed successfully")
     
     return {
         "message": "Packing dual scan processed successfully",
@@ -861,7 +711,33 @@ async def get_all_trackers():
     
     return {"trackers": trackers}
 
-# Comprehensive tracking statistics
+# Dashboard and statistics endpoints
+@app.get("/api/v1/dashboard/stats")
+async def get_dashboard_stats():
+    """Get dashboard statistics"""
+    total_uploaded = len(uploaded_trackers)
+    
+    if total_uploaded == 0:
+        return {
+            "total_trackers": 0,
+            "completed_trackers": 0,
+            "in_progress_trackers": 0,
+            "pending_trackers": 0,
+            "completion_rate": 0
+        }
+    
+    completed = sum(1 for code in uploaded_trackers if code in tracker_status and tracker_status[code].get("dispatch", False))
+    in_progress = sum(1 for code in uploaded_trackers if code in tracker_status and (tracker_status[code].get("label", False) or tracker_status[code].get("packing", False)) and not tracker_status[code].get("dispatch", False))
+    pending = total_uploaded - completed - in_progress
+    
+    return {
+        "total_trackers": total_uploaded,
+        "completed_trackers": completed,
+        "in_progress_trackers": in_progress,
+        "pending_trackers": pending,
+        "completion_rate": round((completed / total_uploaded) * 100, 1)
+    }
+
 @app.get("/api/v1/tracking/stats")
 async def get_tracking_statistics():
     """Get comprehensive tracking statistics"""
@@ -897,47 +773,64 @@ async def get_tracking_statistics():
         "completion_percentage": round((completed / total_uploaded) * 100, 1)
     }
 
-@app.get("/api/v1/dashboard/stats")
-async def get_dashboard_stats():
-    """Get dashboard statistics"""
-    total_uploaded = len(uploaded_trackers)
-    
-    if total_uploaded == 0:
+# Recent scans endpoints
+@app.get("/api/v1/scan/recent")
+async def get_recent_scans(page: int = 1, limit: int = 20):
+    """Get recent scans with pagination"""
+    try:
+        # Calculate offset
+        offset = (page - 1) * limit
+        
+        # Get recent scans with tracker details
+        recent_scans = []
+        for scan in scans_db[offset:offset + limit]:
+            tracker_code = scan.get('tracker_code', '')
+            tracker_info = tracker_data.get(tracker_code, {})
+            
+            # Determine last scan type
+            last_scan = scan.get('scan_type', 'label').capitalize()
+            
+            # Determine scan status
+            scan_status = "Success" if scan.get('status', '') == 'completed' else "Error"
+            
+            # Determine distribution type (simplified - assume single SKU for now)
+            distribution = "Single SKU"
+            
+            # Format scan time
+            scan_time = scan.get('timestamp', '')
+            if scan_time:
+                try:
+                    dt = datetime.fromisoformat(scan_time.replace('Z', '+00:00'))
+                    scan_time = dt.strftime("%Y-%m-%d %H:%M:%S")
+                except:
+                    scan_time = scan_time
+            
+            recent_scans.append({
+                "id": str(scan.get('id', '')),
+                "tracking_id": tracker_info.get('shipment_tracker', tracker_code),
+                "platform": tracker_info.get('channel_name', 'Unknown'),
+                "last_scan": last_scan,
+                "scan_status": scan_status,
+                "distribution": distribution,
+                "scan_time": scan_time,
+                "amount": tracker_info.get('amount', 0),
+                "buyer_city": tracker_info.get('buyer_city', 'Unknown'),
+                "courier": tracker_info.get('courier', 'Unknown')
+            })
+        
         return {
-            "total_trackers": 0,
-            "completed_trackers": 0,
-            "in_progress_trackers": 0,
-            "pending_trackers": 0,
-            "completion_rate": 0
+            "results": recent_scans,
+            "count": len(scans_db),
+            "page": page,
+            "limit": limit,
+            "total_pages": (len(scans_db) + limit - 1) // limit
         }
-    
-    completed = sum(1 for code in uploaded_trackers if code in tracker_status and tracker_status[code].get("dispatch", False))
-    in_progress = sum(1 for code in uploaded_trackers if code in tracker_status and (tracker_status[code].get("label", False) or tracker_status[code].get("packing", False)) and not tracker_status[code].get("dispatch", False))
-    pending = total_uploaded - completed - in_progress
-    
-    return {
-        "total_trackers": total_uploaded,
-        "completed_trackers": completed,
-        "in_progress_trackers": in_progress,
-        "pending_trackers": pending,
-        "completion_rate": round((completed / total_uploaded) * 100, 1)
-    }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching recent scans: {str(e)}")
 
-@app.post("/api/v1/system/clear-data/")
-async def clear_all_data():
-    """Clear all data"""
-    global scans_db, tracker_status, uploaded_trackers, tracker_data
-    
-    scans_db = []
-    tracker_status = {}
-    uploaded_trackers = []
-    tracker_data = {}
-    
-    save_data()
-    
-    return {"message": "All data cleared successfully"}
+# Add missing endpoints that frontend uses
 
-# New API endpoints for LabelScan page
 @app.get("/api/v1/scan/statistics/platform")
 async def get_platform_statistics(scan_type: str = None):
     """Get platform/courier statistics with scan counts including Multi-SKU and Single-SKU breakdown"""
@@ -1015,61 +908,6 @@ async def get_platform_statistics(scan_type: str = None):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching platform statistics: {str(e)}")
-
-@app.get("/api/v1/scan/recent")
-async def get_recent_scans(page: int = 1, limit: int = 20):
-    """Get recent scans with pagination"""
-    try:
-        # Calculate offset
-        offset = (page - 1) * limit
-        
-        # Get recent scans with tracker details
-        recent_scans = []
-        for scan in scans_db[offset:offset + limit]:
-            tracker_code = scan.get('tracker_code', '')
-            tracker_info = tracker_data.get(tracker_code, {})
-            
-            # Determine last scan type
-            last_scan = scan.get('scan_type', 'label').capitalize()
-            
-            # Determine scan status
-            scan_status = "Success" if scan.get('status', '') == 'completed' else "Error"
-            
-            # Determine distribution type (simplified - assume single SKU for now)
-            distribution = "Single SKU"
-            
-            # Format scan time
-            scan_time = scan.get('timestamp', '')
-            if scan_time:
-                try:
-                    dt = datetime.fromisoformat(scan_time.replace('Z', '+00:00'))
-                    scan_time = dt.strftime("%Y-%m-%d %H:%M:%S")
-                except:
-                    scan_time = scan_time
-            
-            recent_scans.append({
-                "id": str(scan.get('id', '')),
-                "tracking_id": tracker_info.get('shipment_tracker', tracker_code),
-                "platform": tracker_info.get('channel_name', 'Unknown'),
-                "last_scan": last_scan,
-                "scan_status": scan_status,
-                "distribution": distribution,
-                "scan_time": scan_time,
-                "amount": tracker_info.get('amount', 0),
-                "buyer_city": tracker_info.get('buyer_city', 'Unknown'),
-                "courier": tracker_info.get('courier', 'Unknown')
-            })
-        
-        return {
-            "results": recent_scans,
-            "count": len(scans_db),
-            "page": page,
-            "limit": limit,
-            "total_pages": (len(scans_db) + limit - 1) // limit
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching recent scans: {str(e)}")
 
 @app.get("/api/v1/scan/recent/label")
 async def get_recent_label_scans(page: int = 1, limit: int = 20):
@@ -1242,16 +1080,20 @@ async def get_recent_dispatch_scans(page: int = 1, limit: int = 20):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching recent dispatch scans: {str(e)}")
 
-# Add new API endpoints for Multi-SKU management
-
-@app.post("/api/v1/system/fix-data/")
-async def fix_data_structure():
-    """Fix existing data structure"""
-    fix_existing_data_structure()
-    return {"message": "Data structure fixed successfully"}
-
-# Startup fix
-startup_fix()
+# System management endpoints
+@app.post("/api/v1/system/clear-data/")
+async def clear_all_data():
+    """Clear all data"""
+    global scans_db, tracker_status, uploaded_trackers, tracker_data
+    
+    scans_db = []
+    tracker_status = {}
+    uploaded_trackers = []
+    tracker_data = {}
+    
+    save_data()
+    
+    return {"message": "All data cleared successfully"}
 
 if __name__ == "__main__":
     import uvicorn
@@ -1262,7 +1104,8 @@ if __name__ == "__main__":
     
     for port in ports:
         try:
-            print(f"Attempting to start server on port {port}...")
+            print(f"Starting simplified backend on port {port}...")
+            print("Using local file storage (data.json) - No Google Sheets integration")
             uvicorn.run(app, host="0.0.0.0", port=port)
             break
         except OSError as e:

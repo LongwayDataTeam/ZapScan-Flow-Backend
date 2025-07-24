@@ -2,117 +2,6 @@
   "scans": [
     {
       "id": "1",
-      "tracker_code": "ASO21G45",
-      "tracking_id": "ASO21G45",
-      "scan_type": "label",
-      "sku_details": {
-        "g_code": "ASO21G45",
-        "ean_code": "ASO21G45",
-        "product_sku_code": "LW-Eggo-7E-All-350W-P1",
-        "channel_id": "33618"
-      },
-      "timestamp": "2025-07-23T15:01:11.103501",
-      "status": "completed"
-    },
-    {
-      "id": "2",
-      "tracker_code": "ASO21G44",
-      "tracking_id": "ASO21G44",
-      "scan_type": "label",
-      "sku_details": {
-        "g_code": "ASO21G44",
-        "ean_code": "ASO21G44",
-        "product_sku_code": "LW-Kwid-Black-1100W-LW-P1",
-        "channel_id": "33618"
-      },
-      "timestamp": "2025-07-23T15:01:12.939954",
-      "status": "completed"
-    },
-    {
-      "id": "3",
-      "tracker_code": "ASO21G43",
-      "tracking_id": "ASO21G43",
-      "scan_type": "label",
-      "sku_details": {
-        "g_code": "ASO21G43",
-        "ean_code": "ASO21G43",
-        "product_sku_code": "LW-Speedy-Black-TF-12-P1",
-        "channel_id": "33618"
-      },
-      "timestamp": "2025-07-23T15:01:14.724929",
-      "status": "completed"
-    },
-    {
-      "id": "4",
-      "tracker_code": "ASO21G43",
-      "tracking_id": "ASO21G43",
-      "scan_type": "packing_dual",
-      "product_code": "ASO21G43",
-      "timestamp": "2025-07-23T15:01:20.501943",
-      "status": "completed"
-    },
-    {
-      "id": "5",
-      "tracker_code": "ASO21G44",
-      "tracking_id": "ASO21G44",
-      "scan_type": "packing_dual",
-      "product_code": "ASO21G44",
-      "timestamp": "2025-07-23T15:01:23.318785",
-      "status": "completed"
-    },
-    {
-      "id": "6",
-      "tracker_code": "ASO21G45",
-      "tracking_id": "ASO21G45",
-      "scan_type": "packing_dual",
-      "product_code": "ASO21G45",
-      "timestamp": "2025-07-23T15:01:25.976620",
-      "status": "completed"
-    },
-    {
-      "id": "7",
-      "tracker_code": "ASO21G43",
-      "tracking_id": "ASO21G43",
-      "scan_type": "dispatch",
-      "sku_details": {
-        "g_code": "ASO21G43",
-        "ean_code": "ASO21G43",
-        "product_sku_code": "LW-Speedy-Black-TF-12-P1",
-        "channel_id": "33618"
-      },
-      "timestamp": "2025-07-23T15:01:33.431860",
-      "status": "completed"
-    },
-    {
-      "id": "8",
-      "tracker_code": "ASO21G44",
-      "tracking_id": "ASO21G44",
-      "scan_type": "dispatch",
-      "sku_details": {
-        "g_code": "ASO21G44",
-        "ean_code": "ASO21G44",
-        "product_sku_code": "LW-Kwid-Black-1100W-LW-P1",
-        "channel_id": "33618"
-      },
-      "timestamp": "2025-07-23T15:01:34.367284",
-      "status": "completed"
-    },
-    {
-      "id": "9",
-      "tracker_code": "ASO21G45",
-      "tracking_id": "ASO21G45",
-      "scan_type": "dispatch",
-      "sku_details": {
-        "g_code": "ASO21G45",
-        "ean_code": "ASO21G45",
-        "product_sku_code": "LW-Eggo-7E-All-350W-P1",
-        "channel_id": "33618"
-      },
-      "timestamp": "2025-07-23T15:01:35.993641",
-      "status": "completed"
-    },
-    {
-      "id": "10",
       "tracker_code": "ASO21G39",
       "tracking_id": "ASO21G39",
       "scan_type": "label",
@@ -122,11 +11,11 @@
         "product_sku_code": "LW-Dr-Mini-Black-PF-12-P1",
         "channel_id": "33618"
       },
-      "timestamp": "2025-07-23T15:11:16.655445",
+      "timestamp": "2025-07-24T11:44:52.182579",
       "status": "completed"
     },
     {
-      "id": "11",
+      "id": "2",
       "tracker_code": "ASO21G39_1",
       "tracking_id": "ASO21G39",
       "scan_type": "label",
@@ -136,114 +25,81 @@
         "product_sku_code": "LW-Kwid-Black-1100W-LW-P1",
         "channel_id": "33618"
       },
-      "timestamp": "2025-07-23T15:11:16.655478",
+      "timestamp": "2025-07-24T11:44:52.182653",
       "status": "completed"
     },
     {
-      "id": "12",
-      "tracker_code": "ASO21G40",
-      "tracking_id": "ASO21G40",
-      "scan_type": "label",
-      "sku_details": {
-        "g_code": "ASO21G40",
-        "ean_code": "ASO21G40",
-        "product_sku_code": "LW-Super-Dlx-Black-4J-P1",
-        "channel_id": "33618"
-      },
-      "timestamp": "2025-07-23T15:11:20.555822",
-      "status": "completed"
-    },
-    {
-      "id": "13",
-      "tracker_code": "ASO21G40_1",
-      "tracking_id": "ASO21G40",
-      "scan_type": "label",
-      "sku_details": {
-        "g_code": "153416040196348",
-        "ean_code": "153416040196348",
-        "product_sku_code": "LW-Super-Dlx-Black-4J-P1",
-        "channel_id": "33618"
-      },
-      "timestamp": "2025-07-23T15:11:20.555885",
-      "status": "completed"
-    },
-    {
-      "id": "14",
-      "tracker_code": "ASO21G41",
-      "tracking_id": "ASO21G41",
-      "scan_type": "label",
-      "sku_details": {
-        "g_code": "ASO21G41",
-        "ean_code": "ASO21G41",
-        "product_sku_code": "LW-Eggo-14E-All-350W-P1",
-        "channel_id": "33618"
-      },
-      "timestamp": "2025-07-23T15:11:21.603445",
-      "status": "completed"
-    },
-    {
-      "id": "15",
-      "tracker_code": "ASO21G41_1",
-      "tracking_id": "ASO21G41",
-      "scan_type": "label",
-      "sku_details": {
-        "g_code": "DSQW-78688446",
-        "ean_code": "DSQW-78688446",
-        "product_sku_code": "LW-Eggo-7E-All-350W-P1",
-        "channel_id": "33618"
-      },
-      "timestamp": "2025-07-23T15:11:21.603461",
-      "status": "completed"
-    },
-    {
-      "id": "16",
-      "tracker_code": "ASO21G42",
-      "tracking_id": "ASO21G42",
-      "scan_type": "label",
-      "sku_details": {
-        "g_code": "ASO21G42",
-        "ean_code": "ASO21G42",
-        "product_sku_code": "LW-Cruiser-ICT-PB-2000W-Black-P1",
-        "channel_id": "33618"
-      },
-      "timestamp": "2025-07-23T15:11:24.675012",
-      "status": "completed"
-    },
-    {
-      "id": "17",
-      "tracker_code": "ASO21G42",
-      "tracking_id": "ASO21G42",
+      "id": "3",
+      "tracker_code": "ASO21G39",
+      "tracking_id": "ASO21G39",
       "scan_type": "packing_dual",
-      "product_code": "ASO21G42",
-      "timestamp": "2025-07-23T15:41:34.809489",
+      "product_code": "ASO21G39",
+      "timestamp": "2025-07-24T11:45:04.051917",
+      "status": "completed"
+    },
+    {
+      "id": "4",
+      "tracker_code": "ASO21G44",
+      "tracking_id": "ASO21G44",
+      "scan_type": "label",
+      "sku_details": {
+        "g_code": "ASO21G44",
+        "ean_code": "ASO21G44",
+        "product_sku_code": "LW-Kwid-Black-1100W-LW-P1",
+        "channel_id": "33618"
+      },
+      "timestamp": "2025-07-24T11:45:30.160023",
+      "status": "completed"
+    },
+    {
+      "id": "5",
+      "tracker_code": "ASO21G44",
+      "tracking_id": "ASO21G44",
+      "scan_type": "packing_dual",
+      "product_code": "ASO21G44",
+      "timestamp": "2025-07-24T11:45:59.366388",
+      "status": "completed"
+    },
+    {
+      "id": "6",
+      "tracker_code": "ASO21G44",
+      "tracking_id": "ASO21G44",
+      "scan_type": "dispatch",
+      "sku_details": {
+        "g_code": "ASO21G44",
+        "ean_code": "ASO21G44",
+        "product_sku_code": "LW-Kwid-Black-1100W-LW-P1",
+        "channel_id": "33618"
+      },
+      "timestamp": "2025-07-24T11:46:03.264192",
       "status": "completed"
     }
   ],
   "tracker_status": {
     "ASO21G39": {
       "label": true,
-      "packing": false,
+      "packing": true,
       "dispatch": false
     },
     "ASO21G40": {
-      "label": true,
+      "label": false,
       "packing": false,
       "dispatch": false
     },
     "ASO21G41": {
-      "label": true,
+      "label": false,
       "packing": false,
       "dispatch": false
     },
     "ASO21G42": {
-      "label": true,
-      "packing": true,
+      "label": false,
+      "packing": false,
       "dispatch": false
     },
     "ASO21G43": {
-      "label": true,
-      "packing": true,
-      "dispatch": true
+      "label": false,
+      "packing": false,
+      "dispatch": false
     },
     "ASO21G44": {
       "label": true,
@@ -251,9 +107,9 @@
       "dispatch": true
     },
     "ASO21G45": {
-      "label": true,
-      "packing": true,
-      "dispatch": true
+      "label": false,
+      "packing": false,
+      "dispatch": false
     },
     "ASO21G39_1": {
       "label": true,
@@ -261,12 +117,12 @@
       "dispatch": false
     },
     "ASO21G40_1": {
-      "label": true,
+      "label": false,
       "packing": false,
       "dispatch": false
     },
     "ASO21G41_1": {
-      "label": true,
+      "label": false,
       "packing": false,
       "dispatch": false
     }
@@ -504,7 +360,7 @@
       "dispatch": 1
     },
     "ASO21G39": {
-      "label": 13,
+      "label": 15,
       "dispatch": 7
     },
     "ASO21G40": {
@@ -524,8 +380,8 @@
       "dispatch": 5
     },
     "ASO21G44": {
-      "label": 7,
-      "dispatch": 5
+      "label": 8,
+      "dispatch": 6
     },
     "ASO21G45": {
       "label": 7,
@@ -611,8 +467,8 @@
         "total": 2
       },
       "packing": {
-        "scanned": 7,
-        "total": 1
+        "scanned": 1,
+        "total": 2
       },
       "dispatch": {
         "scanned": 7,
