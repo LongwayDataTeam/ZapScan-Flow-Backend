@@ -318,16 +318,50 @@ class FirestoreService:
     def clear_all_data(self):
         """Clear all data from Firestore"""
         try:
-            collections = ['scans', 'tracker_status', 'tracker_data', 'tracker_scan_count', 'tracker_scan_progress', 'system']
+            # Clear all collections
+            collections = ['scans', 'tracker_status', 'uploaded_trackers', 'tracker_data', 'tracker_scan_count', 'tracker_scan_progress']
+            
             for collection_name in collections:
                 collection = self._get_collection(collection_name)
                 docs = collection.stream()
                 for doc in docs:
                     doc.reference.delete()
+            
             print("All data cleared from Firestore")
         except Exception as e:
             print(f"Error clearing data: {e}")
-            raise
+            raise e
+
+    def clear_all_data_except_pending(self, pending_trackers: List[str]):
+        """Clear all data from Firestore except pending shipments"""
+        try:
+            # Get all data first
+            all_tracker_data = self.get_all_tracker_data()
+            all_tracker_status = self.get_all_tracker_status()
+            
+            # Clear all collections
+            collections = ['scans', 'tracker_status', 'uploaded_trackers', 'tracker_data', 'tracker_scan_count', 'tracker_scan_progress']
+            
+            for collection_name in collections:
+                collection = self._get_collection(collection_name)
+                docs = collection.stream()
+                for doc in docs:
+                    doc.reference.delete()
+            
+            # Restore pending shipments
+            for tracker_code in pending_trackers:
+                if tracker_code in all_tracker_data:
+                    self.save_tracker_data(tracker_code, all_tracker_data[tracker_code])
+                if tracker_code in all_tracker_status:
+                    self.save_tracker_status(tracker_code, all_tracker_status[tracker_code])
+            
+            # Update uploaded trackers list to only include pending ones
+            self.save_uploaded_trackers(pending_trackers)
+            
+            print(f"All data cleared from Firestore. {len(pending_trackers)} pending shipments preserved.")
+        except Exception as e:
+            print(f"Error clearing data except pending: {e}")
+            raise e
     
     def migrate_from_json(self, json_file_path: str = 'data.json'):
         """Migrate data from JSON file to Firestore"""

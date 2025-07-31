@@ -54,7 +54,13 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "Fulfillment Tracking API"
     
     # CORS
-    BACKEND_CORS_ORIGINS: list = ["http://localhost:3000", "http://localhost:8080"]
+    BACKEND_CORS_ORIGINS: list = [
+        "http://localhost:3000", 
+        "http://localhost:3001",
+        "http://localhost:8080",
+        "https://zapscan-flow-frontend.vercel.app",
+        "https://zapscan-flow.vercel.app"
+    ]
     
     # Pagination
     DEFAULT_PAGE_SIZE: int = 10

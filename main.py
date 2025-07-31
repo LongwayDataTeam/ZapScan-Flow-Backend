@@ -15,13 +15,20 @@ import uuid
 
 # Import Firestore service
 from app.services.firestore_service import firestore_service
+from app.core.config import settings
 
 app = FastAPI(title="Fulfillment Tracking API", version="1.0.0")
 
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://localhost:8080", 
+        "https://zapscan-flow-frontend.vercel.app",
+        "https://zapscan-flow.vercel.app"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -65,6 +72,15 @@ class PackingDualScanRequest(BaseModel):
 class PackingScanRequest(BaseModel):
     tracker_code: str  # Tracking ID
     product_code: str  # G-Code or EAN-Code to match
+
+class PendingShipmentRequest(BaseModel):
+    tracking_id: str
+    scan_type: str  # "packing" or "dispatch"
+    reason: Optional[str] = None  # Optional reason for putting on hold
+
+class UnholdShipmentRequest(BaseModel):
+    tracking_id: str
+    scan_type: str  # "packing" or "dispatch"
 
 def get_trackers_by_tracking_id(tracking_id: str):
     """Get all trackers that belong to the same tracking ID (case-insensitive)"""
@@ -611,67 +627,107 @@ async def process_label_scan(scan_request: ScanRequest):
 
 @app.post("/api/v1/scan/packing/")
 async def process_packing_scan(scan_request: ScanRequest):
-    """Process packing scan - scan next un-scanned SKU sequentially"""
+    """Process a packing scan with automatic unhold capability"""
     try:
-        tracking_id = scan_request.tracker_code
+        tracker_code = scan_request.tracker_code
+        scan_type = scan_request.scan_type
         
-        # Validate prerequisites (label scan must be completed)
-        validate_scan_prerequisites(tracking_id, "packing")
+        # Get all trackers for this tracking ID
+        trackers = get_trackers_by_tracking_id(tracker_code)
+        if not trackers:
+            raise HTTPException(status_code=400, detail="Tracking ID not found in uploaded data")
         
-        # Get next SKU to scan
-        next_sku = get_next_sku_to_scan(tracking_id, "packing")
-        if not next_sku:
-            raise HTTPException(status_code=400, detail="Packing scan already completed for all SKUs in this tracking ID")
+        all_tracker_status = firestore_service.get_all_tracker_status()
         
-        # Create scan record
+        # Check if any trackers are on hold for packing
+        hold_trackers = []
+        normal_trackers = []
+        
+        for tracker in trackers:
+            tracker_code = tracker['tracker_code']
+            sanitized_tracker_code = get_sanitized_tracker_code(tracker_code)
+            tracker_status = all_tracker_status.get(sanitized_tracker_code, {})
+            
+            if tracker_status.get("pending", False):
+                # Check if it's on hold for packing (label done but packing not done)
+                if tracker_status.get("label", False) and not tracker_status.get("packing", False):
+                    hold_trackers.append((sanitized_tracker_code, tracker_status))
+                else:
+                    normal_trackers.append((sanitized_tracker_code, tracker_status))
+            else:
+                normal_trackers.append((sanitized_tracker_code, tracker_status))
+        
+        # Process hold trackers first (unhold them)
+        unhold_count = 0
+        for sanitized_tracker_code, tracker_status in hold_trackers:
+            # Unhold and complete packing scan
+            tracker_status["pending"] = False
+            tracker_status["packing"] = True
+            firestore_service.save_tracker_status(sanitized_tracker_code, tracker_status)
+            unhold_count += 1
+        
+        # Process normal trackers (regular packing scan)
+        scan_count = 0
+        for sanitized_tracker_code, tracker_status in normal_trackers:
+            # Validate prerequisites
+            if not tracker_status.get("label", False):
+                raise HTTPException(status_code=400, detail=f"Label scan must be completed before packing scan for tracker {sanitized_tracker_code}")
+            
+            if tracker_status.get("packing", False):
+                raise HTTPException(status_code=400, detail=f"Packing scan already completed for tracker {sanitized_tracker_code}")
+            
+            # Complete packing scan
+            tracker_status["packing"] = True
+            firestore_service.save_tracker_status(sanitized_tracker_code, tracker_status)
+            scan_count += 1
+        
+        # Update scan counts
+        current_count = firestore_service.get_tracker_scan_count(tracker_code) or {}
+        current_count["packing"] = current_count.get("packing", 0) + scan_count + unhold_count
+        current_count["pending"] = max(0, current_count.get("pending", 0) - unhold_count)
+        firestore_service.save_tracker_scan_count(tracker_code, current_count)
+        
+        # Update scan progress
+        update_scan_progress(tracker_code, "packing")
+        
+        # Save scan record
+        # Get complete tracker data for the first tracker to populate scan record details
+        all_tracker_data = firestore_service.get_all_tracker_data()
+        first_tracker_code = trackers[0]['tracker_code'] if trackers else None
+        first_tracker_data = all_tracker_data.get(first_tracker_code, {}) if first_tracker_code else {}
+        
         scan_record = {
-            "id": str(uuid.uuid4()),
-            "tracker_code": next_sku['tracker_code'],
-            "tracking_id": tracking_id,
+            "tracking_id": tracker_code,
             "scan_type": "packing",
-            "sku_details": {
-                "g_code": next_sku['g_code'],
-                "ean_code": next_sku['ean_code'],
-                "product_sku_code": next_sku['product_sku_code'],
-                "channel_id": next_sku['channel_id']
-            },
-            "timestamp": datetime.now().isoformat(),
-            "status": "completed"
+            "action": "unhold_complete" if unhold_count > 0 else "scan",
+            "scan_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "platform": first_tracker_data.get('channel_name', 'Unknown'),
+            "amount": first_tracker_data.get('amount', 0),
+            "buyer_city": first_tracker_data.get('buyer_city', 'Unknown'),
+            "courier": first_tracker_data.get('courier', 'Unknown'),
+            "distribution": "Single SKU" if len(trackers) == 1 else "Multi SKU",
+            "scan_status": "Success",
+            "status": "completed"  # Add this field for compatibility with recent scans endpoint
         }
-        
-        # Save scan to Firestore
         firestore_service.save_scan(scan_record)
         
-        # Update tracker status for this specific SKU
-        all_tracker_status = firestore_service.get_all_tracker_status()
-        sanitized_tracker_code = get_sanitized_tracker_code(next_sku['tracker_code'])
-        if sanitized_tracker_code not in all_tracker_status:
-            all_tracker_status[sanitized_tracker_code] = {"label": False, "packing": False, "dispatch": False}
-        all_tracker_status[sanitized_tracker_code]["packing"] = True
-        firestore_service.save_tracker_status(sanitized_tracker_code, all_tracker_status[sanitized_tracker_code])
-        
-        # Update scan count and progress
-        current_count = firestore_service.get_tracker_scan_count(tracking_id) or {}
-        current_count["packing"] = current_count.get("packing", 0) + 1
-        firestore_service.save_tracker_scan_count(tracking_id, current_count)
-        
-        update_scan_progress(tracking_id, "packing")
-        
-        # Get updated progress
-        progress = get_scan_progress(tracking_id, "packing")
+        # Return appropriate message
+        if unhold_count > 0 and scan_count > 0:
+            message = f"Shipment unhold and {scan_count} new items scanned. Total {unhold_count + scan_count} items processed."
+        elif unhold_count > 0:
+            message = f"Shipment unhold and packing scan completed successfully! {unhold_count} items processed."
+        else:
+            message = f"Packing scan completed successfully! {scan_count} items scanned."
         
         return {
-            "message": f"Packing scan completed for SKU: {next_sku['product_sku_code']}",
-            "scan": scan_record,
-            "sku_scanned": {
-                "g_code": next_sku['g_code'],
-                "ean_code": next_sku['ean_code'],
-                "product_sku_code": next_sku['product_sku_code'],
-                "channel_id": next_sku['channel_id']
-            },
-            "progress": progress,
-            "next_step": "dispatch" if progress["scanned"] >= progress["total"] else "packing"
+            "message": message,
+            "tracking_id": tracker_code,
+            "scan_type": "packing",
+            "scanned_count": scan_count,
+            "unhold_count": unhold_count,
+            "total_processed": scan_count + unhold_count
         }
+        
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -864,48 +920,460 @@ async def process_packing_dual_scan(scan_request: PackingDualScanRequest):
 
 @app.post("/api/v1/scan/dispatch/")
 async def process_dispatch_scan(scan_request: ScanRequest):
-    """Process dispatch scan - scan ALL trackers for tracking ID at once with strict validation"""
+    """Process a dispatch scan with automatic unhold capability"""
     try:
-        tracking_id = scan_request.tracker_code
+        tracker_code = scan_request.tracker_code
+        scan_type = scan_request.scan_type
         
-        # Validate prerequisites (both label and packing scans must be completed)
-        validate_scan_prerequisites(tracking_id, "dispatch")
+        # Get all trackers for this tracking ID
+        trackers = get_trackers_by_tracking_id(tracker_code)
+        if not trackers:
+            raise HTTPException(status_code=400, detail="Tracking ID not found in uploaded data")
         
-        # Check if dispatch scan is already completed for all trackers
-        trackers = get_trackers_by_tracking_id(tracking_id)
         all_tracker_status = firestore_service.get_all_tracker_status()
-        all_dispatch_scanned = True
+        
+        # Check if any trackers are on hold for dispatch
+        hold_trackers = []
+        normal_trackers = []
+        
         for tracker in trackers:
             tracker_code = tracker['tracker_code']
             sanitized_tracker_code = get_sanitized_tracker_code(tracker_code)
             tracker_status = all_tracker_status.get(sanitized_tracker_code, {})
-            if not tracker_status.get("dispatch", False):
-                all_dispatch_scanned = False
-                break
+            
+            if tracker_status.get("pending", False):
+                # Check if it's on hold for dispatch (label and packing done but dispatch not done)
+                if tracker_status.get("label", False) and tracker_status.get("packing", False) and not tracker_status.get("dispatch", False):
+                    hold_trackers.append((sanitized_tracker_code, tracker_status))
+                else:
+                    normal_trackers.append((sanitized_tracker_code, tracker_status))
+            else:
+                normal_trackers.append((sanitized_tracker_code, tracker_status))
         
-        if all_dispatch_scanned:
-            raise HTTPException(status_code=400, detail="Dispatch scan already completed for all SKUs in this tracking ID")
+        # Process hold trackers first (unhold them)
+        unhold_count = 0
+        for sanitized_tracker_code, tracker_status in hold_trackers:
+            # Unhold and complete dispatch scan
+            tracker_status["pending"] = False
+            tracker_status["dispatch"] = True
+            firestore_service.save_tracker_status(sanitized_tracker_code, tracker_status)
+            unhold_count += 1
         
-        # Scan ALL trackers for this tracking ID at once (regardless of current status)
-        scan_result = scan_all_trackers_for_tracking_id(tracking_id, "dispatch")
-        if not scan_result:
-            raise HTTPException(status_code=400, detail="No trackers found for this tracking ID")
+        # Process normal trackers (regular dispatch scan)
+        scan_count = 0
+        for sanitized_tracker_code, tracker_status in normal_trackers:
+            # Skip if already completed
+            if tracker_status.get("dispatch", False):
+                continue
+            
+            # Enforce workflow: Label -> Packing -> Dispatch
+            if not tracker_status.get("label", False):
+                raise HTTPException(status_code=400, detail=f"Label scan must be completed before dispatch scan for tracker {sanitized_tracker_code}")
+            
+            if not tracker_status.get("packing", False):
+                raise HTTPException(status_code=400, detail=f"Packing scan must be completed before dispatch scan for tracker {sanitized_tracker_code}")
+            
+            # Complete dispatch scan
+            tracker_status["dispatch"] = True
+            firestore_service.save_tracker_status(sanitized_tracker_code, tracker_status)
+            scan_count += 1
         
-        # Get the first scanned SKU for response (for backward compatibility)
-        first_scanned = scan_result["scanned_trackers"][0] if scan_result["scanned_trackers"] else None
+        # If no trackers were processed, return error
+        if scan_count == 0 and unhold_count == 0:
+            raise HTTPException(status_code=400, detail="No trackers found to process for dispatch scan")
+        
+        # Update scan counts
+        current_count = firestore_service.get_tracker_scan_count(tracker_code) or {}
+        current_count["dispatch"] = current_count.get("dispatch", 0) + scan_count + unhold_count
+        current_count["pending"] = max(0, current_count.get("pending", 0) - unhold_count)
+        firestore_service.save_tracker_scan_count(tracker_code, current_count)
+        
+        # Update scan progress
+        update_scan_progress(tracker_code, "dispatch")
+        
+        # Save scan record
+        # Get complete tracker data for the first tracker to populate scan record details
+        all_tracker_data = firestore_service.get_all_tracker_data()
+        first_tracker_code = trackers[0]['tracker_code'] if trackers else None
+        first_tracker_data = all_tracker_data.get(first_tracker_code, {}) if first_tracker_code else {}
+        
+        scan_record = {
+            "tracking_id": tracker_code,
+            "scan_type": "dispatch",
+            "action": "unhold_complete" if unhold_count > 0 else "scan",
+            "scan_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "platform": first_tracker_data.get('channel_name', 'Unknown'),
+            "amount": first_tracker_data.get('amount', 0),
+            "buyer_city": first_tracker_data.get('buyer_city', 'Unknown'),
+            "courier": first_tracker_data.get('courier', 'Unknown'),
+            "distribution": "Single SKU" if len(trackers) == 1 else "Multi SKU",
+            "scan_status": "Success",
+            "status": "completed"  # Add this field for compatibility with recent scans endpoint
+        }
+        firestore_service.save_scan(scan_record)
+        
+        # Return appropriate message
+        if unhold_count > 0 and scan_count > 0:
+            message = f"Shipment unhold and {scan_count} new items scanned. Total {unhold_count + scan_count} items processed."
+        elif unhold_count > 0:
+            message = f"Shipment unhold and dispatch scan completed successfully! {unhold_count} items processed."
+        else:
+            message = f"Dispatch scan completed successfully! {scan_count} items scanned."
         
         return {
-            "message": f"Dispatch scan completed for {scan_result['total_scanned']} SKU(s)",
-            "scan": scan_result["scan_records"][0] if scan_result["scan_records"] else None,
-            "sku_scanned": {
-                "g_code": first_scanned['g_code'] if first_scanned else None,
-                "ean_code": first_scanned['ean_code'] if first_scanned else None,
-                "product_sku_code": first_scanned['product_sku_code'] if first_scanned else None,
-                "channel_id": first_scanned['channel_id'] if first_scanned else None
-            },
-            "progress": scan_result["progress"],
-            "total_scanned": scan_result["total_scanned"],
-            "next_step": "completed"
+            "message": message,
+            "tracking_id": tracker_code,
+            "scan_type": "dispatch",
+            "scanned_count": scan_count,
+            "unhold_count": unhold_count,
+            "total_processed": scan_count + unhold_count
+        }
+        
+    except Exception as e:
+        # Log the error for debugging
+        print(f"Dispatch scan error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/v1/scan/pending/")
+async def process_pending_shipment(pending_request: PendingShipmentRequest):
+    """Process a pending shipment by putting it on hold"""
+    try:
+        tracking_id = pending_request.tracking_id
+        scan_type = pending_request.scan_type
+        
+        trackers = get_trackers_by_tracking_id(tracking_id)
+        if not trackers:
+            raise HTTPException(status_code=400, detail="Tracking ID not found in uploaded data")
+        
+        all_tracker_status = firestore_service.get_all_tracker_status()
+        
+        # Validate workflow before allowing hold
+        for tracker in trackers:
+            tracker_code = tracker['tracker_code']
+            sanitized_tracker_code = get_sanitized_tracker_code(tracker_code)
+            tracker_status = all_tracker_status.get(sanitized_tracker_code, {})
+            
+            # Check if already on hold
+            if tracker_status.get("pending", False):
+                raise HTTPException(status_code=400, detail=f"Shipment for tracking ID {tracking_id} is already on hold for {scan_type}")
+            
+            # Validate workflow prerequisites
+            if scan_type == "packing":
+                # For packing hold: must have label scan completed
+                if not tracker_status.get("label", False):
+                    raise HTTPException(status_code=400, detail=f"Label scan must be completed before putting on hold for packing. Tracker: {sanitized_tracker_code}")
+                if tracker_status.get("packing", False):
+                    raise HTTPException(status_code=400, detail=f"Packing scan already completed for tracker {sanitized_tracker_code}")
+                    
+            elif scan_type == "dispatch":
+                # For dispatch hold: must have label and packing scans completed
+                if not tracker_status.get("label", False):
+                    raise HTTPException(status_code=400, detail=f"Label scan must be completed before putting on hold for dispatch. Tracker: {sanitized_tracker_code}")
+                if not tracker_status.get("packing", False):
+                    raise HTTPException(status_code=400, detail=f"Packing scan must be completed before putting on hold for dispatch. Tracker: {sanitized_tracker_code}")
+                if tracker_status.get("dispatch", False):
+                    raise HTTPException(status_code=400, detail=f"Dispatch scan already completed for tracker {sanitized_tracker_code}")
+        
+        # Put trackers on hold
+        for tracker in trackers:
+            tracker_code = tracker['tracker_code']
+            sanitized_tracker_code = get_sanitized_tracker_code(tracker_code)
+            if sanitized_tracker_code not in all_tracker_status:
+                all_tracker_status[sanitized_tracker_code] = {"label": False, "packing": False, "dispatch": False, "pending": True}
+            else:
+                all_tracker_status[sanitized_tracker_code]["pending"] = True
+            firestore_service.save_tracker_status(sanitized_tracker_code, all_tracker_status[sanitized_tracker_code])
+        
+        current_count = firestore_service.get_tracker_scan_count(tracking_id) or {}
+        current_count["pending"] = current_count.get("pending", 0) + len(trackers)
+        firestore_service.save_tracker_scan_count(tracking_id, current_count)
+        
+        update_scan_progress(tracking_id, "pending")
+        
+        # Save scan record for recent activities
+        # Get complete tracker data for the first tracker to populate scan record details
+        all_tracker_data = firestore_service.get_all_tracker_data()
+        first_tracker_code = trackers[0]['tracker_code'] if trackers else None
+        first_tracker_data = all_tracker_data.get(first_tracker_code, {}) if first_tracker_code else {}
+        
+        scan_record = {
+            "tracking_id": tracking_id,
+            "scan_type": "pending",
+            "action": "hold",
+            "hold_stage": scan_type,  # Add the stage where it's on hold (packing/dispatch)
+            "scan_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "platform": first_tracker_data.get('channel_name', 'Unknown'),
+            "amount": first_tracker_data.get('amount', 0),
+            "buyer_city": first_tracker_data.get('buyer_city', 'Unknown'),
+            "courier": first_tracker_data.get('courier', 'Unknown'),
+            "distribution": "Single SKU" if len(trackers) == 1 else "Multi SKU",
+            "scan_status": "Success",
+            "items_count": len(trackers),  # Add count of items on hold
+            "reason": pending_request.reason,  # Include reason if provided
+            "status": "completed"  # Add for compatibility
+        }
+        firestore_service.save_scan(scan_record)
+        
+        return {
+            "message": f"Shipment for tracking ID {tracking_id} has been put on hold for {scan_type}.",
+            "tracking_id": tracking_id,
+            "scan_type": scan_type,
+            "pending_count": len(trackers)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/v1/scan/unhold/")
+async def process_unhold_shipment(unhold_request: UnholdShipmentRequest):
+    """Process an unhold shipment by removing it from hold and completing the scan"""
+    try:
+        tracking_id = unhold_request.tracking_id
+        scan_type = unhold_request.scan_type
+        
+        trackers = get_trackers_by_tracking_id(tracking_id)
+        if not trackers:
+            raise HTTPException(status_code=400, detail="Tracking ID not found in uploaded data")
+        
+        all_tracker_status = firestore_service.get_all_tracker_status()
+        unhold_count = 0
+        
+        # First, check if any trackers are on hold and validate scan type
+        hold_scan_types = set()
+        for tracker in trackers:
+            tracker_code = tracker['tracker_code']
+            sanitized_tracker_code = get_sanitized_tracker_code(tracker_code)
+            tracker_status = all_tracker_status.get(sanitized_tracker_code, {})
+            
+            if tracker_status.get("pending", False):
+                # Determine what scan type this tracker is on hold for
+                if tracker_status.get("label", False) and not tracker_status.get("packing", False):
+                    hold_scan_types.add("packing")
+                elif tracker_status.get("label", False) and tracker_status.get("packing", False) and not tracker_status.get("dispatch", False):
+                    hold_scan_types.add("dispatch")
+                else:
+                    hold_scan_types.add("packing")  # Default to packing if unclear
+        
+        # Validate that we're unholding in the correct scan type
+        if hold_scan_types and scan_type not in hold_scan_types:
+            expected_types = ", ".join(hold_scan_types)
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Shipment for tracking ID {tracking_id} is on hold for {expected_types} scan. Please unhold in the correct scan type."
+            )
+        
+        for tracker in trackers:
+            tracker_code = tracker['tracker_code']
+            sanitized_tracker_code = get_sanitized_tracker_code(tracker_code)
+            tracker_status = all_tracker_status.get(sanitized_tracker_code, {})
+            
+            # Check if this tracker is on hold
+            if tracker_status.get("pending", False):
+                # Remove from hold
+                tracker_status["pending"] = False
+                
+                # Complete the scan for the current scan type
+                if scan_type == "packing":
+                    tracker_status["packing"] = True
+                elif scan_type == "dispatch":
+                    tracker_status["dispatch"] = True
+                
+                # Save the updated status
+                firestore_service.save_tracker_status(sanitized_tracker_code, tracker_status)
+                unhold_count += 1
+        
+        if unhold_count == 0:
+            raise HTTPException(status_code=400, detail=f"No shipments found on hold for tracking ID {tracking_id}")
+        
+        # Update scan count - remove from pending and add to the completed scan type
+        current_count = firestore_service.get_tracker_scan_count(tracking_id) or {}
+        current_count["pending"] = max(0, current_count.get("pending", 0) - unhold_count)
+        
+        # Add to the completed scan type count
+        if scan_type == "packing":
+            current_count["packing"] = current_count.get("packing", 0) + unhold_count
+        elif scan_type == "dispatch":
+            current_count["dispatch"] = current_count.get("dispatch", 0) + unhold_count
+        
+        firestore_service.save_tracker_scan_count(tracking_id, current_count)
+        
+        # Update scan progress for the completed scan type
+        update_scan_progress(tracking_id, scan_type)
+        
+        # Save scan record for recent activities
+        # Get complete tracker data for the first tracker to populate scan record details
+        all_tracker_data = firestore_service.get_all_tracker_data()
+        first_tracker_code = trackers[0]['tracker_code'] if trackers else None
+        first_tracker_data = all_tracker_data.get(first_tracker_code, {}) if first_tracker_code else {}
+        
+        scan_record = {
+            "tracking_id": tracking_id,
+            "scan_type": scan_type,  # Use the actual scan type, not "pending"
+            "action": "unhold_complete",
+            "scan_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "platform": first_tracker_data.get('channel_name', 'Unknown'),
+            "amount": first_tracker_data.get('amount', 0),
+            "buyer_city": first_tracker_data.get('buyer_city', 'Unknown'),
+            "courier": first_tracker_data.get('courier', 'Unknown'),
+            "distribution": "Single SKU" if len(trackers) == 1 else "Multi SKU",
+            "scan_status": "Success"
+        }
+        firestore_service.save_scan(scan_record)
+        
+        return {
+            "message": f"Shipment for tracking ID {tracking_id} has been unhold and {scan_type} scan completed.",
+            "tracking_id": tracking_id,
+            "scan_type": scan_type,
+            "unhold_count": unhold_count,
+            "completed_scan": scan_type
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/shipments/pending/")
+async def get_pending_shipments(scan_type: str = None):
+    """Get all pending shipments with optional scan type filter"""
+    try:
+        all_tracker_data = firestore_service.get_all_tracker_data()
+        all_tracker_status = firestore_service.get_all_tracker_status()
+        
+        pending_shipments = []
+        
+        for tracker_code, tracker_data in all_tracker_data.items():
+            tracker_status = all_tracker_status.get(tracker_code, {})
+            
+            if tracker_status.get("pending", False):
+                # Determine hold stage based on completed scans
+                label_done = tracker_status.get("label", False)
+                packing_done = tracker_status.get("packing", False)
+                dispatch_done = tracker_status.get("dispatch", False)
+                
+                # Determine hold stage
+                if label_done and packing_done and not dispatch_done:
+                    hold_stage = "Dispatch Hold"
+                elif label_done and not packing_done:
+                    hold_stage = "Packing Hold"
+                elif not label_done:
+                    hold_stage = "Label Hold"
+                else:
+                    hold_stage = "Unknown Hold"
+                
+                # If scan_type is specified, only include those
+                if scan_type:
+                    if scan_type == "packing" and not (label_done and not packing_done):
+                        continue
+                    elif scan_type == "dispatch" and not (label_done and packing_done and not dispatch_done):
+                        continue
+                
+                # Get hold time from recent scans
+                hold_time = "Unknown"
+                recent_scans = firestore_service.get_scans_by_type('pending')
+                for scan in recent_scans:
+                    if scan.get('tracking_id') == tracker_data.get('shipment_tracker', tracker_code):
+                        hold_time = scan.get('scan_time', 'Unknown')
+                        break
+                
+                pending_shipments.append({
+                    "tracker_code": tracker_code,
+                    "tracking_id": tracker_data.get('shipment_tracker', tracker_code),
+                    "scan_type": scan_type or "pending",
+                    "hold_stage": hold_stage,
+                    "hold_time": hold_time,
+                    "items_count": 1,  # Default to 1, can be enhanced later
+                    "reason": "No reason provided",  # Default reason
+                    "details": tracker_data,
+                    "status": tracker_status
+                })
+        
+        return {
+            "pending_shipments": pending_shipments,
+            "count": len(pending_shipments),
+            "scan_type": scan_type
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/shipments/pending/count")
+async def get_pending_shipments_count():
+    """Get count of pending shipments by scan type"""
+    try:
+        all_tracker_status = firestore_service.get_all_tracker_status()
+        
+        packing_pending = 0
+        dispatch_pending = 0
+        
+        for tracker_code, status in all_tracker_status.items():
+            if status.get("pending", False):
+                if status.get("packing", False):
+                    packing_pending += 1
+                if status.get("dispatch", False):
+                    dispatch_pending += 1
+        
+        return {
+            "packing_pending": packing_pending,
+            "dispatch_pending": dispatch_pending,
+            "total_pending": packing_pending + dispatch_pending
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/shipments/pending/all")
+async def get_all_held_shipments():
+    """Get all held shipments with detailed status"""
+    try:
+        all_tracker_data = firestore_service.get_all_tracker_data()
+        all_tracker_status = firestore_service.get_all_tracker_status()
+        
+        held_shipments = []
+        
+        for tracker_code, tracker_data in all_tracker_data.items():
+            tracker_status = all_tracker_status.get(tracker_code, {})
+            
+            if tracker_status.get("pending", False):
+                # Determine hold type based on completed scans
+                label_done = tracker_status.get("label", False)
+                packing_done = tracker_status.get("packing", False)
+                dispatch_done = tracker_status.get("dispatch", False)
+                
+                # Determine hold stage
+                if label_done and packing_done and not dispatch_done:
+                    hold_stage = "Dispatch Hold"
+                elif label_done and not packing_done:
+                    hold_stage = "Packing Hold"
+                elif not label_done:
+                    hold_stage = "Label Hold"
+                else:
+                    hold_stage = "Unknown Hold"
+                
+                held_shipments.append({
+                    "tracker_code": tracker_code,
+                    "tracking_id": tracker_data.get('shipment_tracker', tracker_code),
+                    "hold_stage": hold_stage,
+                    "status": {
+                        "label": label_done,
+                        "packing": packing_done,
+                        "dispatch": dispatch_done,
+                        "pending": True
+                    },
+                    "details": tracker_data,
+                    "progress": {
+                        "label": "✅ Done" if label_done else "⏳ Pending",
+                        "packing": "✅ Done" if packing_done else "⏳ Pending",
+                        "dispatch": "✅ Done" if dispatch_done else "⏳ Pending",
+                        "hold": "🔴 Hold"
+                    }
+                })
+        
+        # Sort by hold stage and tracking ID
+        held_shipments.sort(key=lambda x: (x['hold_stage'], x['tracking_id']))
+        
+        return {
+            "held_shipments": held_shipments,
+            "count": len(held_shipments),
+            "summary": {
+                "dispatch_hold": len([s for s in held_shipments if s['hold_stage'] == "Dispatch Hold"]),
+                "packing_hold": len([s for s in held_shipments if s['hold_stage'] == "Packing Hold"]),
+                "label_hold": len([s for s in held_shipments if s['hold_stage'] == "Label Hold"])
+            }
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -923,6 +1391,7 @@ async def get_tracker_status(tracker_code: str):
                 "label": False,
                 "packing": False,
                 "dispatch": False,
+                "pending": False,
                 "next_available_scan": "not_available"
             }
         
@@ -934,24 +1403,59 @@ async def get_tracker_status(tracker_code: str):
                 "label": False,
                 "packing": False,
                 "dispatch": False,
+                "pending": False,
                 "next_available_scan": "label"
             }
         
-        next_scan = "completed"
-        if not status.get("label", False):
+        # Determine overall status
+        if status.get("pending", False):
+            overall_status = "on_hold"
+        elif status.get("label", False) and status.get("packing", False) and status.get("dispatch", False):
+            overall_status = "completed"
+        elif status.get("label", False) or status.get("packing", False) or status.get("dispatch", False):
+            overall_status = "in_progress"
+        else:
+            overall_status = "not_started"
+        
+        # Determine next scan
+        if status.get("pending", False):
+            next_scan = "unhold"
+        elif not status.get("label", False):
             next_scan = "label"
         elif not status.get("packing", False):
             next_scan = "packing"
         elif not status.get("dispatch", False):
             next_scan = "dispatch"
+        else:
+            next_scan = "completed"
+        
+        # Determine hold stage if on hold
+        hold_stage = None
+        if status.get("pending", False):
+            if status.get("label", False) and status.get("packing", False) and not status.get("dispatch", False):
+                hold_stage = "Dispatch Hold"
+            elif status.get("label", False) and not status.get("packing", False):
+                hold_stage = "Packing Hold"
+            elif not status.get("label", False):
+                hold_stage = "Label Hold"
+            else:
+                hold_stage = "Unknown Hold"
         
         return {
             "tracker_code": tracker_code,
-            "status": "completed" if status.get("dispatch", False) else "in_progress",
+            "status": overall_status,
             "label": status.get("label", False),
             "packing": status.get("packing", False),
             "dispatch": status.get("dispatch", False),
-            "next_available_scan": next_scan
+            "pending": status.get("pending", False),
+            "next_available_scan": next_scan,
+            "hold_stage": hold_stage,
+            "progress": {
+                "label": "✅ Done" if status.get("label", False) else "⏳ Pending",
+                "packing": "✅ Done" if status.get("packing", False) else "⏳ Pending",
+                "dispatch": "✅ Done" if status.get("dispatch", False) else "⏳ Pending",
+                "hold": "🔴 Hold" if status.get("pending", False) else "✅ Active"
+            }
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1003,12 +1507,14 @@ async def get_tracker_scan_count(tracking_id: str):
         label_progress = get_scan_progress(tracking_id, "label")
         packing_progress = get_scan_progress(tracking_id, "packing")
         dispatch_progress = get_scan_progress(tracking_id, "dispatch")
+        pending_progress = get_scan_progress(tracking_id, "pending")
         
         # Get scan counts
         count_data = firestore_service.get_tracker_scan_count(tracking_id) or {}
         label_count = count_data.get("label", 0)
         packing_count = count_data.get("packing", 0)
         dispatch_count = count_data.get("dispatch", 0)
+        pending_count = count_data.get("pending", 0)
         
         return {
             "tracking_id": tracking_id,
@@ -1027,6 +1533,11 @@ async def get_tracker_scan_count(tracking_id: str):
                 "scanned": dispatch_count,
                 "total": len(trackers),
                 "progress": dispatch_progress
+            },
+            "pending": {
+                "scanned": pending_count,
+                "total": len(trackers),
+                "progress": pending_progress
             },
             "skus": trackers
         }
@@ -1066,7 +1577,7 @@ async def get_all_trackers():
                 trackers.append({
                     "tracker_code": doc_id,
                     "original_tracking_id": original_tracking_id,
-                    "status": {"label": False, "packing": False, "dispatch": False},
+                    "status": {"label": False, "packing": False, "dispatch": False, "pending": False},
                     "next_available_scan": "label",
                     "details": tracker_data
                 })
@@ -1092,10 +1603,13 @@ async def get_dashboard_stats():
         # Count completed trackers
         completed_trackers = 0
         in_progress_trackers = 0
+        pending_trackers = 0
         
         for tracker_code in uploaded_trackers:
             tracker_status = all_tracker_status.get(tracker_code, {})
-            if tracker_status.get('label') and tracker_status.get('packing') and tracker_status.get('dispatch'):
+            if tracker_status.get('pending', False):
+                pending_trackers += 1
+            elif tracker_status.get('label') and tracker_status.get('packing') and tracker_status.get('dispatch'):
                 completed_trackers += 1
             elif tracker_status.get('label') or tracker_status.get('packing') or tracker_status.get('dispatch'):
                 in_progress_trackers += 1
@@ -1125,6 +1639,7 @@ async def get_dashboard_stats():
             "total_trackers": total_trackers,
             "completed_trackers": completed_trackers,
             "in_progress_trackers": in_progress_trackers,
+            "pending_trackers": pending_trackers,
             "scan_types": scan_types,
             "recent_products": []  # Can be populated later if needed
         }
@@ -1146,6 +1661,7 @@ async def get_tracking_statistics():
         packing_scanned = 0
         dispatch_scanned = 0
         completed = 0
+        pending = 0
         
         for tracker_code in uploaded_trackers:
             tracker_status = all_tracker_status.get(tracker_code, {})
@@ -1157,6 +1673,8 @@ async def get_tracking_statistics():
                 packing_scanned += 1
             if tracker_status.get('dispatch', False):
                 dispatch_scanned += 1
+            if tracker_status.get('pending', False):
+                pending += 1
             
             # Count completed (all three scans done)
             if tracker_status.get('label', False) and tracker_status.get('packing', False) and tracker_status.get('dispatch', False):
@@ -1167,6 +1685,7 @@ async def get_tracking_statistics():
         packing_percentage = round((packing_scanned / total_uploaded * 100) if total_uploaded > 0 else 0, 1)
         dispatch_percentage = round((dispatch_scanned / total_uploaded * 100) if total_uploaded > 0 else 0, 1)
         completion_percentage = round((completed / total_uploaded * 100) if total_uploaded > 0 else 0, 1)
+        pending_percentage = round((pending / total_uploaded * 100) if total_uploaded > 0 else 0, 1)
         
         return {
             "total_uploaded": total_uploaded,
@@ -1174,10 +1693,12 @@ async def get_tracking_statistics():
             "packing_scanned": packing_scanned,
             "dispatch_scanned": dispatch_scanned,
             "completed": completed,
+            "pending": pending,
             "label_percentage": label_percentage,
             "packing_percentage": packing_percentage,
             "dispatch_percentage": dispatch_percentage,
-            "completion_percentage": completion_percentage
+            "completion_percentage": completion_percentage,
+            "pending_percentage": pending_percentage
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1256,6 +1777,8 @@ async def get_platform_statistics(scan_type: str = None):
                     has_scans = tracker_status_info.get("packing", False)
                 elif scan_type == "dispatch":
                     has_scans = tracker_status_info.get("dispatch", False)
+                elif scan_type == "pending":
+                    has_scans = tracker_status_info.get("pending", False)
                 else:
                     has_scans = any(tracker_status_info.values())
             else:
@@ -1302,6 +1825,7 @@ async def get_tracking_progress(tracking_id: str):
         label_scanned = 0
         packing_scanned = 0
         dispatch_scanned = 0
+        pending_scanned = 0
         total_skus = len(trackers)
         
         for tracker in trackers:
@@ -1314,14 +1838,17 @@ async def get_tracking_progress(tracking_id: str):
                 packing_scanned += 1
             if tracker_status.get('dispatch', False):
                 dispatch_scanned += 1
+            if tracker_status.get('pending', False):
+                pending_scanned += 1
         
         # Calculate percentages
         label_percentage = round((label_scanned / total_skus * 100) if total_skus > 0 else 0, 1)
         packing_percentage = round((packing_scanned / total_skus * 100) if total_skus > 0 else 0, 1)
         dispatch_percentage = round((dispatch_scanned / total_skus * 100) if total_skus > 0 else 0, 1)
+        pending_percentage = round((pending_scanned / total_skus * 100) if total_skus > 0 else 0, 1)
         
         # Determine completion status
-        is_completed = label_scanned == total_skus and packing_scanned == total_skus and dispatch_scanned == total_skus
+        is_completed = label_scanned == total_skus and packing_scanned == total_skus and dispatch_scanned == total_skus and pending_scanned == total_skus
         
         return {
             "tracking_id": tracking_id,
@@ -1329,11 +1856,13 @@ async def get_tracking_progress(tracking_id: str):
             "label_scanned": label_scanned,
             "packing_scanned": packing_scanned,
             "dispatch_scanned": dispatch_scanned,
+            "pending_scanned": pending_scanned,
             "label_percentage": label_percentage,
             "packing_percentage": packing_percentage,
             "dispatch_percentage": dispatch_percentage,
+            "pending_percentage": pending_percentage,
             "is_completed": is_completed,
-            "next_step": "completed" if is_completed else "label" if label_scanned < total_skus else "packing" if packing_scanned < total_skus else "dispatch"
+            "next_step": "completed" if is_completed else "label" if label_scanned < total_skus else "packing" if packing_scanned < total_skus else "dispatch" if dispatch_scanned < total_skus else "pending"
         }
         
     except Exception as e:
@@ -1481,22 +2010,31 @@ async def get_recent_dispatch_scans(page: int = 1, limit: int = 20):
             tracker_code = scan.get('tracker_code', scan.get('tracking_id', ''))
             tracker_info = all_tracker_data.get(tracker_code, {})
             
-            # Determine scan status
-            scan_status = "Success" if scan.get('status', '') == 'completed' else "Error"
+            # Determine scan status - check multiple possible fields
+            scan_status = "Error"
+            if scan.get('status', '') == 'completed' or scan.get('scan_status', '') == 'Success':
+                scan_status = "Success"
             
             # Determine distribution type
             tracking_id = tracker_info.get('shipment_tracker', tracker_code)
             trackers_with_same_id = [t for t in uploaded_trackers if all_tracker_data.get(t, {}).get('shipment_tracker') == tracking_id]
             distribution = "Multi SKU" if len(trackers_with_same_id) > 1 else "Single SKU"
             
-            # Format scan time
-            scan_time = scan.get('timestamp', '')
+            # Format scan time - try multiple possible fields
+            scan_time = scan.get('scan_time', scan.get('timestamp', ''))
             if scan_time:
                 try:
-                    dt = datetime.fromisoformat(scan_time.replace('Z', '+00:00'))
+                    # Handle different timestamp formats
+                    if 'T' in scan_time:
+                        dt = datetime.fromisoformat(scan_time.replace('Z', '+00:00'))
+                    else:
+                        dt = datetime.strptime(scan_time, "%Y-%m-%d %H:%M:%S")
                     scan_time = dt.strftime("%Y-%m-%d %H:%M:%S")
                 except:
+                    # If parsing fails, use the original value
                     scan_time = scan_time
+            else:
+                scan_time = "Unknown"
             
             recent_scans.append({
                 "id": str(scan.get('id', '')),
@@ -1524,10 +2062,24 @@ async def get_recent_dispatch_scans(page: int = 1, limit: int = 20):
 
 @app.post("/api/v1/system/clear-data/")
 async def clear_all_data():
-    """Clear all data from Firestore"""
+    """Clear all data from Firestore except pending shipments"""
     try:
-        firestore_service.clear_all_data()
-        return {"message": "All data cleared successfully"}
+        # Get all tracker status to identify pending shipments
+        all_tracker_status = firestore_service.get_all_tracker_status()
+        pending_trackers = []
+        
+        # Identify trackers that are on pending status
+        for tracker_code, status in all_tracker_status.items():
+            if status.get("pending", False):
+                pending_trackers.append(tracker_code)
+        
+        # Clear all data except pending shipments
+        firestore_service.clear_all_data_except_pending(pending_trackers)
+        
+        return {
+            "message": f"All data cleared successfully. {len(pending_trackers)} pending shipments preserved.",
+            "preserved_pending_count": len(pending_trackers)
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1606,6 +2158,208 @@ async def migrate_to_unique_ids():
         return {
             "message": f"Migration completed. {migrated_count} trackers migrated to unique IDs.",
             "migrated_count": migrated_count
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/scans/recent/")
+async def get_recent_scans(
+    scan_type: Optional[str] = None,
+    page: int = 1,
+    limit: int = 20
+):
+    """Get recent scans with optional filtering by scan type"""
+    try:
+        all_scans = firestore_service.get_scans()
+        
+        # Filter by scan type if specified
+        if scan_type:
+            filtered_scans = [scan for scan in all_scans if scan.get('scan_type') == scan_type]
+        else:
+            filtered_scans = all_scans
+        
+        # Sort by scan time (most recent first)
+        def get_scan_time(scan):
+            # Try different timestamp fields
+            scan_time = scan.get('scan_time', scan.get('timestamp', ''))
+            if scan_time:
+                try:
+                    if 'T' in scan_time:
+                        dt = datetime.fromisoformat(scan_time.replace('Z', '+00:00'))
+                    else:
+                        dt = datetime.strptime(scan_time, "%Y-%m-%d %H:%M:%S")
+                    return dt
+                except:
+                    return datetime.min
+            return datetime.min
+        
+        filtered_scans.sort(key=get_scan_time, reverse=True)
+        
+        # Calculate pagination
+        total_count = len(filtered_scans)
+        start_index = (page - 1) * limit
+        end_index = start_index + limit
+        paginated_scans = filtered_scans[start_index:end_index]
+        
+        # Get tracker data for enrichment
+        all_tracker_data = firestore_service.get_all_tracker_data()
+        uploaded_trackers = firestore_service.get_uploaded_trackers()
+        
+        # Create a mapping from tracker_code to tracker data
+        tracker_code_to_data = {}
+        for doc_id, data in all_tracker_data.items():
+            # Map by document ID
+            tracker_code_to_data[doc_id] = data
+            # Map by tracker_code field if it exists
+            if 'tracker_code' in data:
+                tracker_code_to_data[data['tracker_code']] = data
+            # Map by shipment_tracker for backward compatibility
+            if 'shipment_tracker' in data:
+                tracker_code_to_data[data['shipment_tracker']] = data
+            # Also map by the original tracking ID for scans that might use it
+            if 'tracking_id' in data:
+                tracker_code_to_data[data['tracking_id']] = data
+        
+        # Format results
+        results = []
+        for scan in paginated_scans:
+            # Get tracker_code from scan data
+            tracker_code = scan.get('tracker_code', scan.get('tracking_id', ''))
+            tracker_info = tracker_code_to_data.get(tracker_code, {})
+            
+
+            
+            # Determine scan status
+            scan_status = "Unknown"
+            if scan.get('status', '') == 'completed' or scan.get('scan_status', '') == 'Success':
+                scan_status = "Success"
+            elif scan.get('scan_status', '') == 'Error':
+                scan_status = "Error"
+            
+            # Determine distribution type
+            tracking_id = tracker_info.get('shipment_tracker', tracker_code)
+            trackers_with_same_id = [t for t in uploaded_trackers if all_tracker_data.get(t, {}).get('shipment_tracker') == tracking_id]
+            distribution = "Multi SKU" if len(trackers_with_same_id) > 1 else "Single SKU"
+            
+            # Format scan time
+            scan_time = scan.get('scan_time', scan.get('timestamp', ''))
+            if scan_time:
+                try:
+                    if 'T' in scan_time:
+                        dt = datetime.fromisoformat(scan_time.replace('Z', '+00:00'))
+                        scan_time = dt.strftime("%Y-%m-%d %H:%M:%S")
+                    else:
+                        scan_time = scan_time
+                except:
+                    scan_time = scan_time
+            
+            # For pending scans, show more detailed information
+            if scan.get('scan_type') == 'pending':
+                hold_stage = scan.get('hold_stage', 'Unknown')
+                action = scan.get('action', 'hold')
+                items_count = scan.get('items_count', 1)
+                reason = scan.get('reason', '')
+                
+                result = {
+                    "id": scan.get('id', ''),
+                    "tracking_id": tracking_id,
+                    "platform": tracker_info.get('channel_name', 'Unknown'),
+                    "last_scan": f"Pending ({hold_stage.title()})",
+                    "scan_status": scan_status,
+                    "distribution": distribution,
+                    "scan_time": scan_time,
+                    "amount": tracker_info.get('amount', 0),
+                    "buyer_city": tracker_info.get('buyer_city', 'Unknown'),
+                    "courier": tracker_info.get('courier', 'Unknown'),
+                    "action": action,
+                    "hold_stage": hold_stage,
+                    "items_count": items_count,
+                    "reason": reason,
+                    "current_status": "On Hold" if action == "hold" else "Unhold Complete"
+                }
+            else:
+                result = {
+                    "id": scan.get('id', ''),
+                    "tracking_id": tracking_id,
+                    "platform": tracker_info.get('channel_name', 'Unknown'),
+                    "last_scan": scan.get('scan_type', '').title(),
+                    "scan_status": scan_status,
+                    "distribution": distribution,
+                    "scan_time": scan_time,
+                    "amount": tracker_info.get('amount', 0),
+                    "buyer_city": tracker_info.get('buyer_city', 'Unknown'),
+                    "courier": tracker_info.get('courier', 'Unknown')
+                }
+            
+            results.append(result)
+        
+
+        
+        return {
+            "results": results,
+            "count": total_count,
+            "page": page,
+            "limit": limit,
+            "total_pages": (total_count + limit - 1) // limit
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/debug/pending-scans")
+async def debug_pending_scans():
+    """Debug endpoint to see pending scan data"""
+    try:
+        all_scans = firestore_service.get_scans()
+        pending_scans = [scan for scan in all_scans if scan.get('scan_type') == 'pending']
+        
+        return {
+            "total_scans": len(all_scans),
+            "pending_scans_count": len(pending_scans),
+            "pending_scans": pending_scans[:10]  # Show first 10
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/debug/recent-scans")
+async def debug_recent_scans():
+    """Debug endpoint to see recent scan data and tracker mapping"""
+    try:
+        all_scans = firestore_service.get_scans()
+        all_tracker_data = firestore_service.get_all_tracker_data()
+        
+        # Get first 5 scans
+        recent_scans = all_scans[:5] if all_scans else []
+        
+        # Create mapping
+        tracker_code_to_data = {}
+        for doc_id, data in all_tracker_data.items():
+            tracker_code_to_data[doc_id] = data
+            if 'tracker_code' in data:
+                tracker_code_to_data[data['tracker_code']] = data
+            if 'shipment_tracker' in data:
+                tracker_code_to_data[data['shipment_tracker']] = data
+        
+        # Test mapping for each scan
+        mapping_results = []
+        for scan in recent_scans:
+            tracker_code = scan.get('tracker_code', scan.get('tracking_id', ''))
+            tracker_info = tracker_code_to_data.get(tracker_code, {})
+            
+            mapping_results.append({
+                "scan_id": scan.get('id'),
+                "tracker_code": tracker_code,
+                "tracking_id": scan.get('tracking_id'),
+                "scan_type": scan.get('scan_type'),
+                "found_tracker_info": bool(tracker_info),
+                "tracker_info_keys": list(tracker_info.keys()) if tracker_info else [],
+                "available_keys": list(tracker_code_to_data.keys())[:5]
+            })
+        
+        return {
+            "total_scans": len(all_scans),
+            "total_trackers": len(all_tracker_data),
+            "recent_scans": recent_scans,
+            "mapping_results": mapping_results
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
