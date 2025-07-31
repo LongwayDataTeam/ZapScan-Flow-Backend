@@ -37,7 +37,7 @@ app.add_middleware(
 # Data models
 class ScanRequest(BaseModel):
     tracker_code: str
-    scan_type: str  # "label", "packing", "dispatch"
+    scan_type: str  # "label", "packing", "dispatch", "cancelled"
 
 class TrackerUpload(BaseModel):
     tracker_codes: List[str]
@@ -1034,6 +1034,134 @@ async def process_dispatch_scan(scan_request: ScanRequest):
         print(f"Dispatch scan error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/v1/scan/cancelled/")
+async def process_cancelled_shipment(scan_request: ScanRequest):
+    """Process cancelled shipment - can be called before or after dispatch"""
+    try:
+        tracking_id = scan_request.tracker_code
+        
+        # Check if tracking ID exists in tracker data
+        trackers = get_trackers_by_tracking_id(tracking_id)
+        if not trackers:
+            raise HTTPException(status_code=400, detail="Tracking ID not found in uploaded data")
+        
+        # Check if already cancelled
+        all_tracker_status = firestore_service.get_all_tracker_status()
+        all_cancelled = True
+        for tracker in trackers:
+            tracker_code = tracker['tracker_code']
+            sanitized_tracker_code = get_sanitized_tracker_code(tracker_code)
+            tracker_status = all_tracker_status.get(sanitized_tracker_code, {})
+            if not tracker_status.get("cancelled", False):
+                all_cancelled = False
+                break
+        
+        if all_cancelled:
+            raise HTTPException(status_code=400, detail="Shipment already cancelled for all SKUs in this tracking ID")
+        
+        # Process cancellation for all trackers
+        cancelled_trackers = []
+        scan_records = []
+        
+        for tracker in trackers:
+            tracker_code = tracker['tracker_code']
+            
+            # Create cancellation record
+            cancellation_record = {
+                "id": str(uuid.uuid4()),
+                "tracker_code": tracker_code,
+                "tracking_id": tracking_id,
+                "scan_type": "cancelled",
+                "sku_details": {
+                    "g_code": tracker['g_code'],
+                    "ean_code": tracker['ean_code'],
+                    "product_sku_code": tracker['product_sku_code'],
+                    "channel_id": tracker['channel_id']
+                },
+                "timestamp": datetime.now().isoformat(),
+                "status": "completed",
+                "cancellation_reason": "Shipment cancelled by user"
+            }
+            
+            # Save cancellation to Firestore
+            firestore_service.save_scan(cancellation_record)
+            scan_records.append(cancellation_record)
+            
+            # Update tracker status - mark as cancelled and preserve previous statuses
+            sanitized_tracker_code = get_sanitized_tracker_code(tracker_code)
+            if sanitized_tracker_code not in all_tracker_status:
+                all_tracker_status[sanitized_tracker_code] = {"label": False, "packing": False, "dispatch": False, "cancelled": False}
+            
+            # Mark as cancelled but preserve previous statuses to show the transition
+            all_tracker_status[sanitized_tracker_code]["cancelled"] = True
+            # Don't reset other statuses - keep them to show the progression
+            # all_tracker_status[sanitized_tracker_code]["label"] = False
+            # all_tracker_status[sanitized_tracker_code]["packing"] = False
+            # all_tracker_status[sanitized_tracker_code]["dispatch"] = False
+            all_tracker_status[sanitized_tracker_code]["pending"] = False
+            
+            firestore_service.save_tracker_status(sanitized_tracker_code, all_tracker_status[sanitized_tracker_code])
+            
+            cancelled_trackers.append(tracker)
+        
+        # Get complete tracker data for the first tracker to populate scan record details
+        all_tracker_data = firestore_service.get_all_tracker_data()
+        first_tracker_code = trackers[0]['tracker_code'] if trackers else None
+        first_tracker_data = all_tracker_data.get(first_tracker_code, {}) if first_tracker_code else {}
+        
+        # Determine the previous stage for the first tracker
+        first_sanitized_tracker_code = get_sanitized_tracker_code(first_tracker_code) if first_tracker_code else None
+        first_tracker_status = all_tracker_status.get(first_sanitized_tracker_code, {}) if first_sanitized_tracker_code else {}
+        
+        # Determine previous stage
+        if first_tracker_status.get("dispatch", False):
+            previous_stage = "Dispatch"
+        elif first_tracker_status.get("packing", False):
+            previous_stage = "Packing"
+        elif first_tracker_status.get("label", False):
+            previous_stage = "Label"
+        else:
+            previous_stage = "Pre-Processing"
+        
+        # Create main cancellation scan record
+        cancellation_scan_record = {
+            "tracking_id": tracking_id,
+            "scan_type": "cancelled",
+            "action": "cancellation",
+            "scan_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "platform": first_tracker_data.get('channel_name', 'Unknown'),
+            "amount": first_tracker_data.get('amount', 0),
+            "buyer_city": first_tracker_data.get('buyer_city', 'Unknown'),
+            "courier": first_tracker_data.get('courier', 'Unknown'),
+            "distribution": "Single SKU" if len(trackers) == 1 else "Multi SKU",
+            "scan_status": "Success",
+            "status": "completed",
+            "cancellation_reason": "Shipment cancelled by user",
+            "previous_stage": previous_stage,
+            "stage_transition": f"{previous_stage} → Cancelled"
+        }
+        firestore_service.save_scan(cancellation_scan_record)
+        
+        # Get the first cancelled SKU for response
+        first_cancelled = cancelled_trackers[0] if cancelled_trackers else None
+        
+        return {
+            "message": f"Shipment cancelled for {len(cancelled_trackers)} SKU(s)",
+            "scan": cancellation_scan_record,
+            "sku_cancelled": {
+                "g_code": first_cancelled['g_code'] if first_cancelled else None,
+                "ean_code": first_cancelled['ean_code'] if first_cancelled else None,
+                "product_sku_code": first_cancelled['product_sku_code'] if first_cancelled else None,
+                "channel_id": first_cancelled['channel_id'] if first_cancelled else None
+            },
+            "total_cancelled": len(cancelled_trackers),
+            "cancellation_reason": "Shipment cancelled by user"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/v1/scan/pending/")
 async def process_pending_shipment(pending_request: PendingShipmentRequest):
     """Process a pending shipment by putting it on hold"""
@@ -1050,8 +1178,7 @@ async def process_pending_shipment(pending_request: PendingShipmentRequest):
         # Validate workflow before allowing hold
         for tracker in trackers:
             tracker_code = tracker['tracker_code']
-            sanitized_tracker_code = get_sanitized_tracker_code(tracker_code)
-            tracker_status = all_tracker_status.get(sanitized_tracker_code, {})
+            tracker_status = all_tracker_status.get(tracker_code, {})
             
             # Check if already on hold
             if tracker_status.get("pending", False):
@@ -1061,28 +1188,27 @@ async def process_pending_shipment(pending_request: PendingShipmentRequest):
             if scan_type == "packing":
                 # For packing hold: must have label scan completed
                 if not tracker_status.get("label", False):
-                    raise HTTPException(status_code=400, detail=f"Label scan must be completed before putting on hold for packing. Tracker: {sanitized_tracker_code}")
+                    raise HTTPException(status_code=400, detail=f"Label scan must be completed before putting on hold for packing. Tracker: {tracker_code}")
                 if tracker_status.get("packing", False):
-                    raise HTTPException(status_code=400, detail=f"Packing scan already completed for tracker {sanitized_tracker_code}")
+                    raise HTTPException(status_code=400, detail=f"Packing scan already completed for tracker {tracker_code}")
                     
             elif scan_type == "dispatch":
                 # For dispatch hold: must have label and packing scans completed
                 if not tracker_status.get("label", False):
-                    raise HTTPException(status_code=400, detail=f"Label scan must be completed before putting on hold for dispatch. Tracker: {sanitized_tracker_code}")
+                    raise HTTPException(status_code=400, detail=f"Label scan must be completed before putting on hold for dispatch. Tracker: {tracker_code}")
                 if not tracker_status.get("packing", False):
-                    raise HTTPException(status_code=400, detail=f"Packing scan must be completed before putting on hold for dispatch. Tracker: {sanitized_tracker_code}")
+                    raise HTTPException(status_code=400, detail=f"Packing scan must be completed before putting on hold for dispatch. Tracker: {tracker_code}")
                 if tracker_status.get("dispatch", False):
-                    raise HTTPException(status_code=400, detail=f"Dispatch scan already completed for tracker {sanitized_tracker_code}")
+                    raise HTTPException(status_code=400, detail=f"Dispatch scan already completed for tracker {tracker_code}")
         
         # Put trackers on hold
         for tracker in trackers:
             tracker_code = tracker['tracker_code']
-            sanitized_tracker_code = get_sanitized_tracker_code(tracker_code)
-            if sanitized_tracker_code not in all_tracker_status:
-                all_tracker_status[sanitized_tracker_code] = {"label": False, "packing": False, "dispatch": False, "pending": True}
+            if tracker_code not in all_tracker_status:
+                all_tracker_status[tracker_code] = {"label": False, "packing": False, "dispatch": False, "pending": True}
             else:
-                all_tracker_status[sanitized_tracker_code]["pending"] = True
-            firestore_service.save_tracker_status(sanitized_tracker_code, all_tracker_status[sanitized_tracker_code])
+                all_tracker_status[tracker_code]["pending"] = True
+            firestore_service.save_tracker_status(tracker_code, all_tracker_status[tracker_code])
         
         current_count = firestore_service.get_tracker_scan_count(tracking_id) or {}
         current_count["pending"] = current_count.get("pending", 0) + len(trackers)
@@ -2360,6 +2486,100 @@ async def debug_recent_scans():
             "total_trackers": len(all_tracker_data),
             "recent_scans": recent_scans,
             "mapping_results": mapping_results
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/shipments/cancelled/")
+async def get_cancelled_shipments(scan_type: str = None):
+    """Get all cancelled shipments with optional scan type filter"""
+    try:
+        all_tracker_data = firestore_service.get_all_tracker_data()
+        all_tracker_status = firestore_service.get_all_tracker_status()
+        
+        cancelled_shipments = []
+        
+        for tracker_code, tracker_data in all_tracker_data.items():
+            # Use sanitized tracker code to look up status (same as other endpoints)
+            sanitized_tracker_code = get_sanitized_tracker_code(tracker_code)
+            tracker_status = all_tracker_status.get(sanitized_tracker_code, {})
+            
+            if tracker_status.get("cancelled", False):
+                # Determine cancellation stage based on completed scans
+                label_done = tracker_status.get("label", False)
+                packing_done = tracker_status.get("packing", False)
+                dispatch_done = tracker_status.get("dispatch", False)
+                
+                # Determine cancellation stage - show the transition
+                if dispatch_done:
+                    cancellation_stage = "Post-Dispatch Cancelled"
+                elif packing_done:
+                    cancellation_stage = "Post-Packing Cancelled"
+                elif label_done:
+                    cancellation_stage = "Post-Label Cancelled"
+                else:
+                    cancellation_stage = "Pre-Processing Cancelled"
+                
+                # If scan_type is specified, only include those
+                if scan_type:
+                    if scan_type == "packing" and not (label_done and not dispatch_done):
+                        continue
+                    elif scan_type == "dispatch" and not (label_done and packing_done):
+                        continue
+                
+                # Get cancellation time from recent scans
+                cancellation_time = "Unknown"
+                recent_scans = firestore_service.get_scans_by_type('cancelled')
+                for scan in recent_scans:
+                    if scan.get('tracking_id') == tracker_data.get('shipment_tracker', tracker_code):
+                        cancellation_time = scan.get('scan_time', 'Unknown')
+                        break
+                
+                cancelled_shipments.append({
+                    "tracker_code": tracker_code,
+                    "tracking_id": tracker_data.get('shipment_tracker', tracker_code),
+                    "scan_type": scan_type or "cancelled",
+                    "cancellation_stage": cancellation_stage,
+                    "cancellation_time": cancellation_time,
+                    "items_count": 1,  # Default to 1, can be enhanced later
+                    "reason": "Shipment cancelled",  # Default reason
+                    "details": tracker_data,
+                    "status": tracker_status
+                })
+        
+        return {
+            "cancelled_shipments": cancelled_shipments,
+            "count": len(cancelled_shipments),
+            "scan_type": scan_type
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/shipments/cancelled/count")
+async def get_cancelled_shipments_count():
+    """Get count of cancelled shipments by scan type"""
+    try:
+        all_tracker_status = firestore_service.get_all_tracker_status()
+        all_tracker_data = firestore_service.get_all_tracker_data()
+        
+        packing_cancelled = 0
+        dispatch_cancelled = 0
+        
+        for tracker_code, tracker_data in all_tracker_data.items():
+            # Use sanitized tracker code to look up status
+            sanitized_tracker_code = get_sanitized_tracker_code(tracker_code)
+            status = all_tracker_status.get(sanitized_tracker_code, {})
+            
+            if status.get("cancelled", False):
+                if status.get("packing", False) and not status.get("dispatch", False):
+                    packing_cancelled += 1
+                if status.get("dispatch", False):
+                    dispatch_cancelled += 1
+        
+        return {
+            "packing_cancelled": packing_cancelled,
+            "dispatch_cancelled": dispatch_cancelled,
+            "total_cancelled": packing_cancelled + dispatch_cancelled
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

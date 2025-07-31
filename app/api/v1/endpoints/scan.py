@@ -288,6 +288,67 @@ def scan_dispatch_multi_sku(
         raise HTTPException(status_code=500, detail=f"Scan processing error: {str(e)}")
 
 
+@router.post("/cancelled/", response_model=ScanResponse)
+def scan_cancelled_shipment(
+    scan_data: DispatchScanCreate,
+    db: Session = Depends(get_db)
+):
+    """Process cancelled shipment scan - can cancel before or after dispatch"""
+    try:
+        # Extract tracker code from request body
+        tracker_code = scan_data.tracker_code
+        
+        # Get all orders with this tracking ID
+        orders = db.query(Order).filter(Order.tracker_code == tracker_code).all()
+        if not orders:
+            raise HTTPException(status_code=404, detail="Order not found")
+        
+        # Count total SKUs for this tracking ID
+        total_skus = len(orders)
+        
+        # Check if this tracking ID has already been cancelled
+        existing_cancelled = db.query(ScanCheckpoint).join(Order).filter(
+            Order.tracker_code == tracker_code,
+            ScanCheckpoint.checkpoint_type == "cancelled"
+        ).first()
+        
+        if existing_cancelled:
+            raise HTTPException(status_code=400, detail="This shipment has already been cancelled")
+        
+        # Get the first order for processing (since cancellation affects the entire shipment)
+        selected_order = min(orders, key=lambda x: (x.channel_id or '', x.order_id))
+        
+        # Get the first order item for SKU details
+        selected_order_item = db.query(OrderItem).filter(OrderItem.order_id == selected_order.id).first()
+        
+        # Update scan data to use the selected order
+        scan_data.order_id = selected_order.id
+        scan_data.tracker_code = tracker_code
+        
+        # Process the cancellation scan
+        scan_checkpoint = ScanService.process_cancelled_shipment_scan(db, scan_data)
+        
+        # Add Multi-SKU information to response
+        response_data = scan_checkpoint.dict()
+        response_data.update({
+            "is_multi_sku": total_skus > 1,
+            "total_sku_count": total_skus,
+            "scanned_sku_count": total_skus,  # All SKUs are cancelled
+            "remaining_sku_count": 0,  # No remaining SKUs after cancellation
+            "selected_sku_g_code": selected_order_item.g_code if selected_order_item else None,
+            "selected_sku_ean_code": selected_order_item.ean_code if selected_order_item else None,
+            "selected_sku_product_code": selected_order_item.product_sku_code if selected_order_item else None,
+            "cancellation_status": "cancelled"
+        })
+        
+        return response_data
+        
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Scan processing error: {str(e)}")
+
+
 @router.get("/validate/g-code/{g_code}", response_model=ScanValidationResponse)
 def validate_g_code(g_code: str, db: Session = Depends(get_db)):
     """Validate a G-code scan"""
