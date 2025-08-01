@@ -4,7 +4,7 @@ FastAPI backend for Fulfillment Tracking System
 Uses Firestore as the database - No local file storage
 """
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
@@ -12,12 +12,22 @@ import json
 import os
 from datetime import datetime
 import uuid
+import asyncio
+import threading
+import time
 
 # Import Firestore service
 from app.services.firestore_service import firestore_service
+from app.services.gsheets_service import gsheets_service
 from app.core.config import settings
 
 app = FastAPI(title="Fulfillment Tracking API", version="1.0.0")
+
+@app.on_event("startup")
+async def startup_event():
+    """Startup event to initialize services"""
+    # Start Google Sheets sync scheduler
+    start_gsheets_sync_scheduler()
 
 # Add CORS middleware
 app.add_middleware(
@@ -61,6 +71,7 @@ class TrackerData(BaseModel):
     buyer_state: Optional[str] = None
     buyer_pincode: Optional[str] = None
     invoice_number: Optional[str] = None
+    last_updated: Optional[str] = None
 
 class TrackerDataUpload(BaseModel):
     trackers: List[TrackerData]
@@ -314,6 +325,37 @@ def get_sanitized_tracker_code(original_tracker_code: str) -> str:
     """Get the sanitized version of a tracker code for Firestore operations"""
     return sanitize_tracker_code(original_tracker_code)
 
+def sync_to_google_sheets():
+    """Background task to sync data to Google Sheets"""
+    try:
+        all_tracker_data = firestore_service.get_all_tracker_data()
+        if all_tracker_data:
+            success = gsheets_service.sync_all_tracker_data(all_tracker_data)
+            if success:
+                print(f"Successfully synced {len(all_tracker_data)} trackers to Google Sheets")
+            else:
+                print("Failed to sync to Google Sheets")
+        else:
+            print("No tracker data to sync")
+    except Exception as e:
+        print(f"Error in Google Sheets sync: {e}")
+
+def start_gsheets_sync_scheduler():
+    """Start the Google Sheets sync scheduler"""
+    def sync_scheduler():
+        while True:
+            try:
+                sync_to_google_sheets()
+                time.sleep(300)  # Sync every 5 minutes
+            except Exception as e:
+                print(f"Error in sync scheduler: {e}")
+                time.sleep(60)  # Wait 1 minute before retrying
+    
+    # Start sync scheduler in a separate thread
+    sync_thread = threading.Thread(target=sync_scheduler, daemon=True)
+    sync_thread.start()
+    print("Google Sheets sync scheduler started")
+
 @app.get("/")
 async def root():
     return {"message": "Fulfillment Tracking API with Firestore"}
@@ -509,10 +551,11 @@ async def upload_detailed_trackers(
                             break
                     
                     if existing_tracker_code:
-                        # Update existing tracker data
+                        # Update existing tracker data with timestamp
                         tracker_dict = tracker_data.dict()
                         tracker_dict['shipment_tracker'] = tracker_data.shipment_tracker
                         tracker_dict['tracker_code'] = existing_tracker_code
+                        tracker_dict['last_updated'] = datetime.now().isoformat()  # Add timestamp
                         firestore_service.save_tracker_data(existing_tracker_code, tracker_dict)
                         updated_trackers.append(tracker_data.shipment_tracker)
                         processed_tracking_id_product_combinations.add(tracking_product_key)
@@ -525,10 +568,11 @@ async def upload_detailed_trackers(
             random_suffix = str(uuid.uuid4())[:8]  # 8 characters from UUID
             unique_doc_id = f"{sanitize_tracker_code(tracker_data.shipment_tracker)}_{timestamp}_{random_suffix}"
             
-            # Save tracker data
+            # Save tracker data with timestamp
             tracker_dict = tracker_data.dict()
             tracker_dict['shipment_tracker'] = tracker_data.shipment_tracker  # Keep original tracking ID
             tracker_dict['tracker_code'] = tracker_data.shipment_tracker  # Keep original tracker code
+            tracker_dict['last_updated'] = datetime.now().isoformat()  # Add timestamp
             firestore_service.save_tracker_data(unique_doc_id, tracker_dict)
             
             # Initialize tracker status
