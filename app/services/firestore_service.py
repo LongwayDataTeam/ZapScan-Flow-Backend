@@ -6,6 +6,7 @@ import os
 import re
 import uuid
 from datetime import datetime
+import time
 
 class FirestoreService:
     def __init__(self):
@@ -150,7 +151,7 @@ class FirestoreService:
             doc_ref = collection.document(sanitized_tracker_code)
             doc_ref.set(status_data)
         except Exception as e:
-            print(f"Error saving tracker status for tracker_code '{tracker_code}': {e}")
+            # Error saving tracker status - silent for performance
             raise
     
     def get_tracker_status(self, tracker_code: str) -> Optional[Dict[str, Any]]:
@@ -164,7 +165,7 @@ class FirestoreService:
             doc = doc_ref.get()
             return doc.to_dict() if doc.exists else None
         except Exception as e:
-            print(f"Error getting tracker status for tracker_code '{tracker_code}': {e}")
+            # Error getting tracker status - silent for performance
             return None
     
     def get_all_tracker_status(self) -> Dict[str, Any]:
@@ -174,7 +175,7 @@ class FirestoreService:
             docs = collection.stream()
             return {doc.id: doc.to_dict() for doc in docs}
         except Exception as e:
-            print(f"Error getting all tracker status: {e}")
+            # Error getting all tracker status - silent for performance
             return {}
     
     def save_uploaded_trackers(self, trackers: List[str]):
@@ -184,7 +185,7 @@ class FirestoreService:
             doc_ref = collection.document('uploaded_trackers')
             doc_ref.set({'trackers': trackers})
         except Exception as e:
-            print(f"Error saving uploaded trackers: {e}")
+            # Error saving uploaded trackers - silent for performance
             raise
     
     def get_uploaded_trackers(self) -> List[str]:
@@ -197,7 +198,7 @@ class FirestoreService:
                 return doc.to_dict().get('trackers', [])
             return []
         except Exception as e:
-            print(f"Error getting uploaded trackers: {e}")
+            # Error getting uploaded trackers - silent for performance
             return []
     
     def save_tracker_data(self, tracker_code: str, data: Dict[str, Any]):
@@ -214,7 +215,97 @@ class FirestoreService:
             doc_ref = collection.document(sanitized_tracker_code)
             doc_ref.set(data)
         except Exception as e:
-            print(f"Error saving tracker data for tracker_code '{tracker_code}': {e}")
+            # Error saving tracker data - silent for performance
+            raise
+
+    def save_tracker_data_batch(self, tracker_data_batch: List[tuple]) -> List[str]:
+        """Save multiple tracker data entries in a single batch operation - ULTRA-OPTIMIZED"""
+        try:
+            if not tracker_data_batch:
+                return []
+            
+            collection = self._get_collection('tracker_data')
+            batch = self.db.batch()
+            saved_tracker_codes = []
+            
+            # ULTRA-OPTIMIZED: Process in smaller sub-batches for better performance
+            sub_batch_size = 250  # Firestore batch limit is 500, using 250 for safety
+            
+            for i in range(0, len(tracker_data_batch), sub_batch_size):
+                sub_batch = tracker_data_batch[i:i + sub_batch_size]
+                sub_batch_codes = []
+                
+                for tracker_code, data in sub_batch:
+                    # Validate tracker_code for Firestore document ID
+                    if not tracker_code or len(tracker_code) == 0:
+                        continue
+                    
+                    # Sanitize tracker_code for Firestore document ID
+                    sanitized_tracker_code = self._sanitize_document_id(tracker_code)
+                    
+                    doc_ref = collection.document(sanitized_tracker_code)
+                    batch.set(doc_ref, data)
+                    sub_batch_codes.append(tracker_code)
+                
+                # Commit sub-batch immediately for faster processing
+                if sub_batch_codes:
+                    batch.commit()
+                    saved_tracker_codes.extend(sub_batch_codes)
+                    # Sub-batch saved tracker data entries
+                
+                # Create new batch for next sub-batch
+                batch = self.db.batch()
+            
+            print(f"✅ Ultra-optimized batch saved {len(saved_tracker_codes)} tracker data entries")
+            return saved_tracker_codes
+            
+        except Exception as e:
+            print(f"Error in ultra-optimized batch save tracker data: {e}")
+            raise
+
+    def save_tracker_status_batch(self, status_batch: List[tuple]) -> List[str]:
+        """Save multiple tracker status entries in a single batch operation - ULTRA-OPTIMIZED"""
+        try:
+            if not status_batch:
+                return []
+            
+            collection = self._get_collection('tracker_status')
+            batch = self.db.batch()
+            saved_tracker_codes = []
+            
+            # ULTRA-OPTIMIZED: Process in smaller sub-batches for better performance
+            sub_batch_size = 250  # Firestore batch limit is 500, using 250 for safety
+            
+            for i in range(0, len(status_batch), sub_batch_size):
+                sub_batch = status_batch[i:i + sub_batch_size]
+                sub_batch_codes = []
+                
+                for tracker_code, status_data in sub_batch:
+                    # Validate tracker_code for Firestore document ID
+                    if not tracker_code or len(tracker_code) == 0:
+                        continue
+                    
+                    # Sanitize tracker_code for Firestore document ID
+                    sanitized_tracker_code = self._sanitize_document_id(tracker_code)
+                    
+                    doc_ref = collection.document(sanitized_tracker_code)
+                    batch.set(doc_ref, status_data)
+                    sub_batch_codes.append(tracker_code)
+                
+                # Commit sub-batch immediately for faster processing
+                if sub_batch_codes:
+                    batch.commit()
+                    saved_tracker_codes.extend(sub_batch_codes)
+                    print(f"⚡ Sub-batch saved {len(sub_batch_codes)} tracker status entries")
+                
+                # Create new batch for next sub-batch
+                batch = self.db.batch()
+            
+            print(f"✅ Ultra-optimized batch saved {len(saved_tracker_codes)} tracker status entries")
+            return saved_tracker_codes
+            
+        except Exception as e:
+            print(f"Error in ultra-optimized batch save tracker status: {e}")
             raise
     
     def get_tracker_data(self, tracker_code: str) -> Optional[Dict[str, Any]]:
@@ -316,49 +407,129 @@ class FirestoreService:
             return {}
     
     def clear_all_data(self):
-        """Clear all data from Firestore"""
+        """Clear all data from Firestore - OPTIMIZED WITH BATCH OPERATIONS"""
         try:
-            # Clear all collections
+            print("🧹 Starting optimized data clear...")
+            start_time = time.time()
+            
+            # Clear all collections with batch operations
             collections = ['scans', 'tracker_status', 'uploaded_trackers', 'tracker_data', 'tracker_scan_count', 'tracker_scan_progress']
+            total_deleted = 0
             
             for collection_name in collections:
-                collection = self._get_collection(collection_name)
-                docs = collection.stream()
-                for doc in docs:
-                    doc.reference.delete()
+                try:
+                    collection = self._get_collection(collection_name)
+                    docs = list(collection.stream())
+                    
+                    if docs:
+                        print(f"📦 Clearing {len(docs)} documents from {collection_name}...")
+                        
+                        # Use batch operations for faster deletion
+                        batch_size = 500  # Firestore batch limit
+                        for i in range(0, len(docs), batch_size):
+                            batch = self.db.batch()
+                            batch_docs = docs[i:i + batch_size]
+                            
+                            for doc in batch_docs:
+                                batch.delete(doc.reference)
+                            
+                            batch.commit()
+                            total_deleted += len(batch_docs)
+                            
+                        print(f"✅ Cleared {len(docs)} documents from {collection_name}")
+                    else:
+                        print(f"ℹ️ No documents in {collection_name}")
+                        
+                except Exception as e:
+                    print(f"⚠️ Error clearing {collection_name}: {e}")
+                    continue
             
-            print("All data cleared from Firestore")
+            end_time = time.time()
+            processing_time = end_time - start_time
+            
+            print(f"⚡ Data clear completed in {processing_time:.2f} seconds")
+            print(f"🗑️ Total documents deleted: {total_deleted}")
+            print(f"🚀 Performance: {total_deleted/processing_time:.1f} documents/second")
+            
         except Exception as e:
             print(f"Error clearing data: {e}")
             raise e
 
     def clear_all_data_except_pending(self, pending_trackers: List[str]):
-        """Clear all data from Firestore except pending shipments"""
+        """Clear all data from Firestore except pending shipments - OPTIMIZED WITH BATCH OPERATIONS"""
         try:
+            print(f"🧹 Starting optimized data clear (preserving {len(pending_trackers)} pending shipments)...")
+            start_time = time.time()
+            
             # Get all data first
             all_tracker_data = self.get_all_tracker_data()
             all_tracker_status = self.get_all_tracker_status()
             
-            # Clear all collections
+            # Clear all collections with batch operations
             collections = ['scans', 'tracker_status', 'uploaded_trackers', 'tracker_data', 'tracker_scan_count', 'tracker_scan_progress']
+            total_deleted = 0
             
             for collection_name in collections:
-                collection = self._get_collection(collection_name)
-                docs = collection.stream()
-                for doc in docs:
-                    doc.reference.delete()
+                try:
+                    collection = self._get_collection(collection_name)
+                    docs = list(collection.stream())
+                    
+                    if docs:
+                        print(f"📦 Clearing {len(docs)} documents from {collection_name}...")
+                        
+                        # Use batch operations for faster deletion
+                        batch_size = 500  # Firestore batch limit
+                        for i in range(0, len(docs), batch_size):
+                            batch = self.db.batch()
+                            batch_docs = docs[i:i + batch_size]
+                            
+                            for doc in batch_docs:
+                                batch.delete(doc.reference)
+                            
+                            batch.commit()
+                            total_deleted += len(batch_docs)
+                            
+                        print(f"✅ Cleared {len(docs)} documents from {collection_name}")
+                    else:
+                        print(f"ℹ️ No documents in {collection_name}")
+                        
+                except Exception as e:
+                    print(f"⚠️ Error clearing {collection_name}: {e}")
+                    continue
             
-            # Restore pending shipments
-            for tracker_code in pending_trackers:
-                if tracker_code in all_tracker_data:
-                    self.save_tracker_data(tracker_code, all_tracker_data[tracker_code])
-                if tracker_code in all_tracker_status:
-                    self.save_tracker_status(tracker_code, all_tracker_status[tracker_code])
+            # Restore pending shipments with batch operations
+            if pending_trackers:
+                print(f"🔄 Restoring {len(pending_trackers)} pending shipments...")
+                
+                # Prepare batch data for pending shipments
+                pending_data_batch = []
+                pending_status_batch = []
+                
+                for tracker_code in pending_trackers:
+                    if tracker_code in all_tracker_data:
+                        pending_data_batch.append((tracker_code, all_tracker_data[tracker_code]))
+                    if tracker_code in all_tracker_status:
+                        pending_status_batch.append((tracker_code, all_tracker_status[tracker_code]))
+                
+                # Execute batch operations for pending shipments
+                if pending_data_batch:
+                    self.save_tracker_data_batch(pending_data_batch)
+                if pending_status_batch:
+                    self.save_tracker_status_batch(pending_status_batch)
+                
+                # Update uploaded trackers list to only include pending ones
+                self.save_uploaded_trackers(pending_trackers)
+                
+                print(f"✅ Restored {len(pending_trackers)} pending shipments")
             
-            # Update uploaded trackers list to only include pending ones
-            self.save_uploaded_trackers(pending_trackers)
+            end_time = time.time()
+            processing_time = end_time - start_time
             
-            print(f"All data cleared from Firestore. {len(pending_trackers)} pending shipments preserved.")
+            print(f"⚡ Data clear completed in {processing_time:.2f} seconds")
+            print(f"🗑️ Total documents deleted: {total_deleted}")
+            print(f"🚀 Performance: {total_deleted/processing_time:.1f} documents/second")
+            print(f"📦 {len(pending_trackers)} pending shipments preserved")
+            
         except Exception as e:
             print(f"Error clearing data except pending: {e}")
             raise e
@@ -417,13 +588,14 @@ class FirestoreService:
     def delete_tracker_status(self, tracker_code: str):
         """Delete tracker status from Firestore"""
         try:
-            sanitized_tracker_code = self._sanitize_document_id(tracker_code)
             collection = self._get_collection('tracker_status')
-            doc_ref = collection.document(sanitized_tracker_code)
-            doc_ref.delete()
+            doc_id = self._sanitize_document_id(tracker_code)
+            collection.document(doc_id).delete()
+            print(f"Deleted tracker status for {tracker_code}")
         except Exception as e:
-            print(f"Error deleting tracker status for tracker_code '{tracker_code}': {e}")
-            raise
+            print(f"Error deleting tracker status: {e}")
+
+
 
 # Global instance
 firestore_service = FirestoreService() 

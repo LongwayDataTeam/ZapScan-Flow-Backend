@@ -66,6 +66,20 @@ class Settings(BaseSettings):
     DEFAULT_PAGE_SIZE: int = 10
     MAX_PAGE_SIZE: int = 100
     
+    # Google Sheets Configuration
+    GOOGLE_SHEETS_SPREADSHEET_ID: str = Field(
+        default="1rLSCtZkVU3WJ8qQz1l5Tv3L6aaAuqf_iKGaKaLMh2zQ",
+        env="GOOGLE_SHEETS_SPREADSHEET_ID"
+    )
+    GOOGLE_SHEETS_CREDENTIALS_PATH: str = Field(
+        default="gsheet-onescan-service.json",
+        env="GOOGLE_SHEETS_CREDENTIALS_PATH"
+    )
+    GOOGLE_SHEETS_WORKSHEET_NAME: str = Field(
+        default="tracker",
+        env="GOOGLE_SHEETS_WORKSHEET_NAME"
+    )
+    
     class Config:
         env_file = ".env"
         case_sensitive = True

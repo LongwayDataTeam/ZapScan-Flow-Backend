@@ -1,117 +1,115 @@
 #!/usr/bin/env python3
 """
-Script to convert Firebase service account JSON to environment variables
-This helps secure your Firebase credentials when pushing to GitHub
+Setup script for Google Sheets environment variables
 """
 
-import json
 import os
 import sys
 
-def convert_service_account_to_env():
-    """Convert Firebase service account JSON to environment variables"""
+def setup_environment():
+    """Setup environment variables for Google Sheets sync"""
+    print("🔧 Setting up Google Sheets environment variables...")
+    print("=" * 50)
     
-    # Check if service account file exists
-    service_account_path = 'firebase-service-account.json'
-    if not os.path.exists(service_account_path):
-        print(f"Error: {service_account_path} not found!")
-        print("Please ensure the Firebase service account file is in the current directory.")
+    # Check current environment variables
+    print("📋 Current Environment Variables:")
+    spreadsheet_id = os.getenv('GOOGLE_SHEETS_SPREADSHEET_ID')
+    credentials_path = os.getenv('GOOGLE_SHEETS_CREDENTIALS_PATH', 'gsheet-onescan-service.json')
+    worksheet_name = os.getenv('GOOGLE_SHEETS_WORKSHEET_NAME', 'tracker')
+    
+    print(f"   GOOGLE_SHEETS_SPREADSHEET_ID: {'✅ Set' if spreadsheet_id else '❌ Not set'}")
+    print(f"   GOOGLE_SHEETS_CREDENTIALS_PATH: {'✅ Exists' if os.path.exists(credentials_path) else '❌ Not found'}")
+    print(f"   GOOGLE_SHEETS_WORKSHEET_NAME: {worksheet_name}")
+    
+    # Check if credentials file exists
+    if not os.path.exists(credentials_path):
+        print(f"\n❌ Credentials file not found: {credentials_path}")
+        print("💡 Please ensure the Google Sheets service account JSON file is in the project root")
         return False
+    
+    # If spreadsheet ID is not set, prompt user
+    if not spreadsheet_id:
+        print("\n❌ GOOGLE_SHEETS_SPREADSHEET_ID is not set!")
+        print("💡 To fix this, you need to:")
+        print("   1. Create a Google Spreadsheet")
+        print("   2. Share it with your service account email")
+        print("   3. Copy the Spreadsheet ID from the URL")
+        print("   4. Set the environment variable")
+        
+        # Try to get from user
+        try:
+            user_spreadsheet_id = input("\n📝 Enter your Google Spreadsheet ID (or press Enter to skip): ").strip()
+            if user_spreadsheet_id:
+                # Set environment variable for current session
+                os.environ['GOOGLE_SHEETS_SPREADSHEET_ID'] = user_spreadsheet_id
+                print(f"✅ Set GOOGLE_SHEETS_SPREADSHEET_ID to: {user_spreadsheet_id}")
+                
+                # Also save to .env file
+                env_file = '.env'
+                with open(env_file, 'a') as f:
+                    f.write(f"\nGOOGLE_SHEETS_SPREADSHEET_ID={user_spreadsheet_id}\n")
+                print(f"💾 Saved to {env_file} file")
+                
+                return True
+            else:
+                print("⚠️ Skipping spreadsheet ID setup")
+                return False
+        except KeyboardInterrupt:
+            print("\n⚠️ Setup cancelled")
+            return False
+    
+    print("\n✅ Environment variables are properly configured!")
+    return True
+
+def test_connection():
+    """Test the Google Sheets connection"""
+    print("\n🧪 Testing Google Sheets connection...")
     
     try:
-        # Read the service account file
-        with open(service_account_path, 'r') as f:
-            service_account = json.load(f)
+        from app.services.gsheets_service import gsheets_service
         
-        # Create .env file content
-        env_content = """# Firebase Configuration (Generated from service account)
-FIREBASE_TYPE={}
-FIREBASE_PROJECT_ID={}
-FIREBASE_PRIVATE_KEY_ID={}
-FIREBASE_PRIVATE_KEY={}
-FIREBASE_CLIENT_EMAIL={}
-FIREBASE_CLIENT_ID={}
-FIREBASE_AUTH_URI={}
-FIREBASE_TOKEN_URI={}
-FIREBASE_AUTH_PROVIDER_X509_CERT_URL={}
-FIREBASE_CLIENT_X509_CERT_URL={}
-FIREBASE_UNIVERSE_DOMAIN={}
-
-# Database Configuration
-USE_FIRESTORE=true
-
-# API Configuration
-API_HOST=0.0.0.0
-API_PORT=8000
-
-# CORS Configuration
-ALLOWED_ORIGINS=http://localhost:3000
-""".format(
-            service_account.get('type', ''),
-            service_account.get('project_id', ''),
-            service_account.get('private_key_id', ''),
-            service_account.get('private_key', '').replace('\n', '\\n'),
-            service_account.get('client_email', ''),
-            service_account.get('client_id', ''),
-            service_account.get('auth_uri', ''),
-            service_account.get('token_uri', ''),
-            service_account.get('auth_provider_x509_cert_url', ''),
-            service_account.get('client_x509_cert_url', ''),
-            service_account.get('universe_domain', '')
-        )
-        
-        # Write to .env file
-        with open('.env', 'w') as f:
-            f.write(env_content)
-        
-        print("✅ Successfully converted Firebase service account to environment variables!")
-        print("📁 Created .env file with your Firebase credentials")
-        print("🔒 The .env file is already in .gitignore and will not be committed")
-        print("\n📋 Next steps:")
-        print("1. Add your environment variables to GitHub Secrets:")
-        print("   - Go to your GitHub repository")
-        print("   - Navigate to Settings > Secrets and variables > Actions")
-        print("   - Add each environment variable as a repository secret")
-        print("2. For deployment, set these environment variables in your hosting platform")
-        print("3. You can now safely delete the firebase-service-account.json file")
+        # Initialize the service
+        if gsheets_service.initialize():
+            print("✅ Google Sheets service initialized successfully")
+            
+            # Test spreadsheet access
+            spreadsheet = gsheets_service.sheets_service.open_by_key(gsheets_service.spreadsheet_id)
+            print(f"✅ Successfully accessed spreadsheet: {spreadsheet.title}")
+            
+            # Test worksheet access
+            try:
+                worksheet = spreadsheet.worksheet(gsheets_service.worksheet_name)
+                print(f"✅ Successfully accessed worksheet: {gsheets_service.worksheet_name}")
+                
+                # Get current data
+                all_values = worksheet.get_all_values()
+                print(f"📊 Current data in sheet: {len(all_values)} rows")
         
         return True
+            except Exception as e:
+                print(f"❌ Could not access worksheet: {e}")
+                return False
+        else:
+            print("❌ Failed to initialize Google Sheets service")
+            return False
         
     except Exception as e:
-        print(f"Error converting service account: {e}")
+        print(f"❌ Error testing connection: {e}")
         return False
 
-def show_github_secrets_instructions():
-    """Show instructions for setting up GitHub Secrets"""
-    print("\n🔐 GitHub Secrets Setup Instructions:")
-    print("=" * 50)
-    print("1. Go to your GitHub repository")
-    print("2. Click on 'Settings' tab")
-    print("3. In the left sidebar, click 'Secrets and variables' > 'Actions'")
-    print("4. Click 'New repository secret'")
-    print("5. Add each of these secrets:")
-    print("\n   Required secrets:")
-    print("   - FIREBASE_TYPE")
-    print("   - FIREBASE_PROJECT_ID") 
-    print("   - FIREBASE_PRIVATE_KEY_ID")
-    print("   - FIREBASE_PRIVATE_KEY")
-    print("   - FIREBASE_CLIENT_EMAIL")
-    print("   - FIREBASE_CLIENT_ID")
-    print("   - FIREBASE_AUTH_URI")
-    print("   - FIREBASE_TOKEN_URI")
-    print("   - FIREBASE_AUTH_PROVIDER_X509_CERT_URL")
-    print("   - FIREBASE_CLIENT_X509_CERT_URL")
-    print("   - FIREBASE_UNIVERSE_DOMAIN")
-    print("\n   Optional secrets:")
-    print("   - API_HOST")
-    print("   - API_PORT")
-    print("   - ALLOWED_ORIGINS")
-
 if __name__ == "__main__":
-    print("🔧 Firebase Service Account to Environment Variables Converter")
-    print("=" * 60)
+    print("🚀 Google Sheets Environment Setup")
+    print("=" * 50)
     
-    if convert_service_account_to_env():
-        show_github_secrets_instructions()
+    # Setup environment
+    if setup_environment():
+        # Test connection
+        if test_connection():
+            print("\n🎉 Setup completed successfully!")
+            print("📝 Your Google Sheets sync should now work properly.")
+        else:
+            print("\n❌ Connection test failed!")
+            print("🔧 Please check your credentials and spreadsheet permissions.")
     else:
-        sys.exit(1) 
+        print("\n⚠️ Setup incomplete!")
+        print("🔧 Please configure the environment variables manually.") 
