@@ -513,7 +513,6 @@ async def upload_trackers(
                         continue
             
             # Always generate unique document ID for Firestore to avoid overwriting
-            import time
             timestamp = int(time.time() * 1000)  # milliseconds
             random_suffix = str(uuid.uuid4())[:8]  # 8 characters from UUID
             unique_doc_id = f"{sanitize_tracker_code(tracker_code)}_{timestamp}_{random_suffix}"
@@ -676,7 +675,6 @@ async def upload_detailed_trackers(
                 # For "allow" mode, continue to create new tracker with unique code
             
             # Always generate unique document ID for Firestore to avoid overwriting
-            import time
             timestamp = int(time.time() * 1000)  # milliseconds
             random_suffix = str(uuid.uuid4())[:8]  # 8 characters from UUID
             unique_doc_id = f"{sanitize_tracker_code(tracker_data.shipment_tracker)}_{timestamp}_{random_suffix}"
@@ -2545,7 +2543,6 @@ async def migrate_to_unique_ids():
                 continue
                 
             # Generate new unique document ID
-            import time
             timestamp = int(time.time() * 1000)  # milliseconds
             random_suffix = str(uuid.uuid4())[:8]  # 8 characters from UUID
             new_doc_id = f"{sanitize_tracker_code(old_doc_id)}_{timestamp}_{random_suffix}"
